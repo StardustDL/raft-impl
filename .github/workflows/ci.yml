@@ -22,3 +22,5 @@ jobs:
       run: pwsh -c ./lab2.ps1
     - name: Lab 3
       run: pwsh -c ./lab3.ps1
+    - name: All labs
+      run: pwsh -c ./lab.ps1
