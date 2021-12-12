@@ -1,5 +1,5 @@
 $env:GOPATH=$PWD
-$env:GO111MODULE="auto"
+$env:GO111MODULE="off"
 cd src/raft
 go test -run BasicAgree
 go test -run FailAgree
