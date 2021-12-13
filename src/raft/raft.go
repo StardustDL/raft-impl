@@ -139,6 +139,10 @@ func (rf *Raft) readPersist(data []byte) {
 	// d.Decode(&rf.yyy)
 }
 
+type RpcTransferData interface {
+	term() int
+}
+
 type AppendEntriesArgs struct {
 	Term         int        // leader’s term
 	LeaderId     int        // so follower can redirect clients
@@ -148,9 +152,17 @@ type AppendEntriesArgs struct {
 	LeaderCommit int        // leader’s commitIndex
 }
 
+func (data AppendEntriesArgs) term() int {
+	return data.Term
+}
+
 type AppendEntriesReply struct {
 	Term    int  // currentTerm, for leader to update itself
 	Success bool // true if follower contained entry matching prevLogIndex and prevLogTerm
+}
+
+func (data AppendEntriesReply) term() int {
+	return data.Term
 }
 
 //
@@ -159,8 +171,8 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.Log("Recieve AppendEntries from %d (term: %d)", args.LeaderId, args.Term)
 
-	if rf.currentTerm <= args.Term {
-		rf.currentTerm = args.Term
+	rf.checkFollow(args)
+	if rf.currentTerm == args.Term {
 		rf.follow()
 	}
 
@@ -229,12 +241,20 @@ type RequestVoteArgs struct {
 	LastLogTerm  int // term of candidate’s last log entry
 }
 
+func (data RequestVoteArgs) term() int {
+	return data.Term
+}
+
 //
 // example RequestVote RPC reply structure.
 //
 type RequestVoteReply struct {
 	Term        int  // currentTerm, for candidate to update itself
 	VoteGranted bool // true means candidate received vote
+}
+
+func (data RequestVoteReply) term() int {
+	return data.Term
 }
 
 func (rf *Raft) Log(format string, v ...interface{}) {
@@ -280,10 +300,7 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	rf.Log("Recieve RequestVote from %d (term: %d)", args.CandidateId, args.Term)
 
-	if rf.currentTerm < args.Term {
-		rf.currentTerm = args.Term
-		rf.follow()
-	}
+	rf.checkFollow(args)
 
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm && (rf.votedFor == unvoted || rf.votedFor == args.CandidateId) && rf.isUpToDate(args.LastLogIndex, args.LastLogTerm) {
@@ -472,10 +489,7 @@ func (rf *Raft) campaign() {
 			for !ok && rf.role == candidate {
 				ok = rf.sendRequestVote(i, args, &reply)
 			}
-			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
-				rf.follow()
-			}
+			rf.checkFollow(reply)
 			if rf.role == candidate {
 				if reply.VoteGranted {
 					rf.voteGranted[i] = true
@@ -485,6 +499,13 @@ func (rf *Raft) campaign() {
 				}
 			}
 		}(rf, i)
+	}
+}
+
+func (rf *Raft) checkFollow(data RpcTransferData) {
+	if data.term() > rf.currentTerm {
+		rf.currentTerm = data.term()
+		rf.follow()
 	}
 }
 
@@ -545,10 +566,7 @@ func (rf *Raft) heartbeat() {
 			for !ok && rf.role == leader {
 				ok = rf.sendAppendEntries(i, args, &reply)
 			}
-			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
-				rf.follow()
-			}
+			rf.checkFollow(reply)
 			if rf.role == leader {
 
 			}
