@@ -401,6 +401,20 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	rf.longrun()
+
+	return rf
+}
+
+func (rf *Raft) resetElectionTimeout() {
+	rf.electionTimer.Reset(getRandomizedElectionTimeout())
+}
+
+func (rf *Raft) resetHeartbeatTimeout() {
+	rf.heartbeatTimer.Reset(heartbeatTimeout)
+}
+
+func (rf *Raft) longrun() {
 	go func(rf *Raft) {
 		for {
 			<-rf.electionTimer.C
@@ -414,16 +428,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			go rf.heartbeat()
 		}
 	}(rf)
-
-	return rf
-}
-
-func (rf *Raft) resetElectionTimeout() {
-	rf.electionTimer.Reset(getRandomizedElectionTimeout())
-}
-
-func (rf *Raft) resetHeartbeatTimeout() {
-	rf.heartbeatTimer.Reset(heartbeatTimeout)
 }
 
 func (rf *Raft) isWinner() bool {
