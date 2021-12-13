@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"labrpc"
@@ -38,7 +40,7 @@ const (
 
 const (
 	unvoted            = -1
-	heartbeatTimeout   = time.Duration(100) * time.Millisecond
+	heartbeatTimeout   = time.Duration(50) * time.Millisecond
 	electionTimeoutMin = 200 * time.Millisecond
 	electionTimeoutMax = 400 * time.Millisecond
 )
@@ -124,26 +126,24 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
-	// Your code here.
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := gob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logs)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
-	// Your code here.
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := gob.NewDecoder(r)
-	// d.Decode(&rf.xxx)
-	// d.Decode(&rf.yyy)
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	d.Decode(&rf.currentTerm)
+	d.Decode(&rf.votedFor)
+	d.Decode(&rf.logs)
 }
 
 type RpcTransferData interface {
@@ -176,6 +176,9 @@ func (data AppendEntriesReply) term() int {
 // AppendEntries RPC handler.
 //
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
+
 	if len(args.Entries) == 0 {
 		rf.Log("Recieve Heartbeat from %d (term: %d)", args.LeaderId, args.Term)
 	} else {
@@ -230,6 +233,8 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 					}
 				}
 			}
+
+			rf.persist()
 		}
 	}
 
@@ -345,22 +350,28 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 // RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
+
 	rf.Log("Recieve RequestVote from %d (term: %d)", args.CandidateId, args.Term)
 
 	rf.checkFollow(args)
 
 	reply.Term = rf.currentTerm
 
+	rf.mu.Lock()
+
 	// Reply false if term < currentTerm
 	// If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote
 	if args.Term >= rf.currentTerm && (rf.votedFor == unvoted || rf.votedFor == args.CandidateId) && rf.isUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		rf.votedFor = args.CandidateId
+		rf.persist()
 
 		// granting vote to candidate
 		rf.resetElectionTimeout()
 
 		reply.VoteGranted = true
 	}
+
+	rf.mu.Unlock()
 
 	rf.Log("Reply RequestVote from %d: %t", args.CandidateId, reply.VoteGranted)
 }
@@ -416,7 +427,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		// If command received from client: append entry to local log, respond after entry applied to state machine
 
 		rf.mu.Lock()
-		defer rf.mu.Unlock()
 
 		entry := LogEntry{
 			Term:  rf.currentTerm,
@@ -427,6 +437,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		lastLogIndex := len(rf.logs) - 1
 		rf.nextIndex[rf.me] = lastLogIndex + 1
 		rf.matchIndex[rf.me] = lastLogIndex
+
+		rf.persist()
+
+		rf.mu.Unlock()
 
 		index = lastLogIndex
 
@@ -441,6 +455,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			go func(rf *Raft, i int) {
 				for rf.role == leader {
 					var reply AppendEntriesReply
+
+					rf.mu.Lock()
 					index, term := rf.prevLogSignature(i)
 					args := AppendEntriesArgs{
 						Term:         rf.currentTerm,
@@ -450,6 +466,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 						Entries:      rf.logs[rf.nextIndex[i]:],
 						LeaderCommit: rf.commitIndex,
 					}
+					rf.mu.Unlock()
 
 					ok := false
 					for !ok && rf.role == leader {
@@ -619,8 +636,8 @@ func (rf *Raft) longrun() {
 // If votes received from majority of servers: become leader
 func (rf *Raft) isWinner() bool {
 	votedCount := 0
-	for _, v := range rf.voteGranted {
-		if v {
+	for i, v := range rf.voteGranted {
+		if v || i == rf.me {
 			votedCount++
 		}
 	}
@@ -638,12 +655,17 @@ func (rf *Raft) campaign() {
 	}
 	rf.role = candidate
 
+	rf.mu.Lock()
+
 	// Increment currentTerm
 	rf.currentTerm++
 
 	// Vote for self
 	rf.votedFor = rf.me
-	rf.voteGranted[rf.me] = true
+
+	rf.persist()
+
+	rf.mu.Unlock()
 
 	// Reset election timer
 	rf.resetElectionTimeout()
@@ -655,7 +677,9 @@ func (rf *Raft) campaign() {
 		}
 		go func(rf *Raft, i int) {
 			var reply RequestVoteReply
+			rf.mu.Lock()
 			index, term := rf.lastLogSignature()
+			rf.mu.Unlock()
 			args := RequestVoteArgs{
 				Term:         rf.currentTerm,
 				CandidateId:  rf.me,
@@ -685,7 +709,9 @@ func (rf *Raft) campaign() {
 // If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
 func (rf *Raft) checkFollow(data RpcTransferData) {
 	if data.term() > rf.currentTerm {
+		rf.mu.Lock()
 		rf.currentTerm = data.term()
+		rf.mu.Unlock()
 		rf.follow()
 	}
 }
@@ -694,9 +720,15 @@ func (rf *Raft) follow() {
 	if rf.role == follower {
 		return
 	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	rf.Log("Follow")
 	rf.role = follower
+
 	rf.votedFor = unvoted
+	rf.persist()
+
 	rf.resetElectionTimeout()
 }
 
@@ -713,7 +745,7 @@ func (rf *Raft) lead() {
 	}
 
 	// Upon election: send heartbeat to each server to prevent election timeouts
-	rf.resetHeartbeatTimeout()
+	rf.heartbeat()
 }
 
 // If election timeout elapses: start new election
@@ -737,6 +769,8 @@ func (rf *Raft) heartbeat() {
 		}
 		go func(rf *Raft, i int) {
 			var reply AppendEntriesReply
+
+			rf.mu.Lock()
 			index, term := rf.prevLogSignature(i)
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
@@ -746,15 +780,13 @@ func (rf *Raft) heartbeat() {
 				Entries:      make([]LogEntry, 0),
 				LeaderCommit: rf.commitIndex,
 			}
+			rf.mu.Unlock()
 
 			ok := false
 			for !ok && rf.role == leader {
 				ok = rf.sendAppendEntries(i, args, &reply)
 			}
 			rf.checkFollow(reply)
-			if rf.role == leader {
-				// TODO: nothing
-			}
 		}(rf, i)
 	}
 
