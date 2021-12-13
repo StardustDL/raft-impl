@@ -441,6 +441,9 @@ func (rf *Raft) isWinner() bool {
 }
 
 func (rf *Raft) campaign() {
+	if rf.role == leader {
+		return
+	}
 	rf.Log("Campaign")
 	for i := range rf.voteGranted {
 		rf.voteGranted[i] = false
