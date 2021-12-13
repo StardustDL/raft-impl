@@ -37,8 +37,10 @@ const (
 )
 
 const (
-	unvoted          = -1
-	heartbeatTimeout = time.Duration(20) * time.Millisecond
+	unvoted            = -1
+	heartbeatTimeout   = time.Duration(100) * time.Millisecond
+	electionTimeoutMin = 200 * time.Millisecond
+	electionTimeoutMax = 400 * time.Millisecond
 )
 
 const (
@@ -48,8 +50,7 @@ const (
 )
 
 func getRandomizedElectionTimeout() time.Duration {
-	const min, max int64 = 200, 400
-	return time.Millisecond * time.Duration((min + (rand.Int63() % (max - min))))
+	return electionTimeoutMin + time.Duration(rand.Int63())%(electionTimeoutMax-electionTimeoutMin)
 }
 
 //
@@ -199,6 +200,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 			reply.Success = false
 		} else {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
 			if args.PrevLogIndex >= 0 && rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
 				// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 				reply.Success = false
@@ -410,6 +414,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.Log("Recieve client request.")
 
 		// If command received from client: append entry to local log, respond after entry applied to state machine
+
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
 
 		entry := LogEntry{
 			Term:  rf.currentTerm,
