@@ -166,12 +166,14 @@ func (data AppendEntriesReply) term() int {
 }
 
 //
-// example AppendEntries RPC handler.
+// AppendEntries RPC handler.
 //
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.Log("Recieve AppendEntries from %d (term: %d)", args.LeaderId, args.Term)
 
 	rf.checkFollow(args)
+
+	// If AppendEntries RPC received from new leader: convert to follower
 	if rf.currentTerm == args.Term {
 		rf.follow()
 	}
@@ -179,8 +181,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
-	} else {
-		rf.resetElectionTimeout() // assume rpc is from leader
+	} else { // assume rpc is from current leader
+		// receiving AppendEntries RPC from current leader
+		rf.resetElectionTimeout()
 		if args.PrevLogIndex < 0 || args.PrevLogIndex >= len(rf.logs) {
 			reply.Success = false
 		} else {
@@ -295,7 +298,7 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 }
 
 //
-// example RequestVote RPC handler.
+// RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	rf.Log("Recieve RequestVote from %d (term: %d)", args.CandidateId, args.Term)
@@ -305,7 +308,10 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm && (rf.votedFor == unvoted || rf.votedFor == args.CandidateId) && rf.isUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		rf.votedFor = args.CandidateId
+
+		// granting vote to candidate
 		rf.resetElectionTimeout()
+
 		reply.VoteGranted = true
 	}
 
@@ -458,19 +464,29 @@ func (rf *Raft) isWinner() bool {
 }
 
 func (rf *Raft) campaign() {
+	// If election timeout elapses: start new election
+
 	if rf.role == leader {
 		return
 	}
+
 	rf.Log("Campaign")
 	for i := range rf.voteGranted {
 		rf.voteGranted[i] = false
 	}
 	rf.role = candidate
+
+	// Increment currentTerm
 	rf.currentTerm++
+
+	// Vote for self
 	rf.votedFor = rf.me
 	rf.voteGranted[rf.me] = true
+
+	// Reset election timer
 	rf.resetElectionTimeout()
 
+	// Send RequestVote RPCs to all other servers
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
@@ -493,6 +509,8 @@ func (rf *Raft) campaign() {
 			if rf.role == candidate {
 				if reply.VoteGranted {
 					rf.voteGranted[i] = true
+
+					// If votes received from majority of servers: become leader
 					if rf.isWinner() {
 						rf.lead()
 					}
@@ -502,6 +520,7 @@ func (rf *Raft) campaign() {
 	}
 }
 
+// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
 func (rf *Raft) checkFollow(data RpcTransferData) {
 	if data.term() > rf.currentTerm {
 		rf.currentTerm = data.term()
@@ -530,6 +549,8 @@ func (rf *Raft) lead() {
 		rf.nextIndex[i] = lastIndex
 		rf.matchIndex[i] = 0
 	}
+
+	// Upon election: send heartbeat to each server to prevent election timeouts
 	rf.resetHeartbeatTimeout()
 }
 
@@ -541,6 +562,7 @@ func (rf *Raft) election() {
 	rf.campaign()
 }
 
+// Upon election: send initial empty AppendEntries RPCs (heartbeat) to each server; repeat during idle periods to prevent election timeouts
 func (rf *Raft) heartbeat() {
 	if rf.role != leader {
 		return
@@ -573,5 +595,8 @@ func (rf *Raft) heartbeat() {
 		}(rf, i)
 	}
 
-	rf.resetHeartbeatTimeout()
+	if rf.role == leader {
+		// repeat during idle periods to prevent election timeouts
+		rf.resetHeartbeatTimeout()
+	}
 }
