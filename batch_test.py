@@ -5,7 +5,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
-from typing import Tuple
+from typing import List, Tuple
 
 ROOT = pathlib.Path(__file__).parent
 RAFT_ROOT = ROOT.joinpath("src").joinpath("raft")
@@ -48,7 +48,7 @@ if not LOG_ROOT.exists():
 TIMEOUT_RET = 99
 
 
-def runtest(name: str, id: str) -> Tuple[bool, timedelta]:
+def runtest(name: str, logroot: pathlib.Path, id: str) -> Tuple[bool, timedelta]:
     start = time.time()
     retcode = 0
     stdout = ""
@@ -59,12 +59,12 @@ def runtest(name: str, id: str) -> Tuple[bool, timedelta]:
         stdout = result.stdout
     except subprocess.TimeoutExpired as ex:
         retcode = TIMEOUT_RET
-        stdout = ex.stdout
+        stdout = ex.stdout.decode("utf-8")
     end = time.time()
     if retcode != 0:
-        logdir = LOG_ROOT.joinpath(name)
+        logdir = logroot.joinpath(name)
         if not logdir.exists():
-            os.mkdir(logdir)
+            os.makedirs(logdir)
         if retcode == TIMEOUT_RET:
             logdir.joinpath(f"{id}.err").write_text(stdout)
         else:
@@ -72,11 +72,11 @@ def runtest(name: str, id: str) -> Tuple[bool, timedelta]:
     return retcode == 0, timedelta(seconds=end-start)
 
 
-def paralleltest(args: Tuple[str, str]) -> Tuple[bool, timedelta]:
-    name, i = args
-    prompt = f"Test {name} ({i})"
+def paralleltest(args: Tuple[str, str, str]) -> Tuple[bool, timedelta]:
+    id, name, i = args
+    prompt = f"{id}: Test {name} ({i})"
     print(f"{prompt}...")
-    ispass, tm = runtest(name, f"{name}-{i}")
+    ispass, tm = runtest(name, LOG_ROOT.joinpath(id), f"{i}")
     if ispass:
         print(f"{prompt} {tm}")
     else:
@@ -84,23 +84,40 @@ def paralleltest(args: Tuple[str, str]) -> Tuple[bool, timedelta]:
     return ispass, tm
 
 
-def test(name: str, cnt: int = 10, workers=None):
+def test(id: str, name: str, cnt: int = 10, workers=None) -> int:
     now = datetime.now()
 
     with ProcessPoolExecutor(workers) as pool:
-        results = list(pool.map(paralleltest, [(name, i) for i in range(cnt)]))
+        results = list(
+            pool.map(paralleltest, [(id, name, i) for i in range(cnt)]))
 
-    passed = sum((1 for p in results if p))
+    passed = sum((1 for p in results if p[0]))
 
-    logs = [
-        f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%"]
+    logs = [f"{id}: {name}, {cnt} cases, {workers} workers, @ {now}",
+            f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%"]
     logs.extend(
         (f"Case {i}: {'PASSED' if v[0] else 'FAILED'} {v[1]}" for i, v in enumerate(results)))
 
-    nowstr = now.strftime('%Y-%m-%dT%H-%M-%S')
+    logroot = LOG_ROOT.joinpath(id).joinpath(name)
+    if not logroot.exists():
+        os.makedirs(logroot)
 
-    LOG_ROOT.joinpath(
-        f"test-{name}-{cnt}({nowstr}).log").write_text("\n".join(logs))
+    logroot.joinpath(
+        f"{name}.log").write_text("\n".join(logs))
+
+    return passed
+
+
+def testall(id: str, names: List[str], cnt: int = 10, workers=None):
+    result = {}
+    logroot = LOG_ROOT.joinpath(id)
+    if not logroot.exists():
+        os.makedirs(logroot)
+    for name in names:
+        passed = test(id, name, cnt, workers)
+        result[name] = passed
+    LOG_ROOT.joinpath(id).joinpath(
+        f"result.log").write_text("\n".join((f"{k}: {int(v/cnt*10000)/100}% ({v}/{cnt})" for k, v in result.items())))
 
 
 def main():
@@ -116,8 +133,10 @@ def main():
     else:
         names = [name]
 
-    for name in names:
-        test(name, cnt, workers)
+    now = datetime.now()
+    id = now.strftime("%Y-%m-%dT%H-%M-%S")
+
+    testall(id, names, cnt, workers)
 
 
 if __name__ == "__main__":
