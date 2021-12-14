@@ -86,6 +86,7 @@ type Raft struct {
 	me        int           // index into peers[]
 	logger    *log.Logger   // logger
 	applyCh   chan ApplyMsg // a channel on which the tester or service expects Raft to send ApplyMsg messages
+	killCh    chan bool     // a channel for kill
 
 	// Persistent state on all servers (Updated on stable storage before responding to RPCs)
 
@@ -503,6 +504,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 					ok := false
 					for !ok && rf.role == leader {
+						if rf.hasKilled() {
+							return
+						}
 						ok = rf.sendAppendEntries(i, args, &reply)
 					}
 					rf.checkFollow(reply)
@@ -535,7 +539,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	rf.Log("Killed")
-	// Your code here, if desired.
+	close(rf.killCh)
 }
 
 //
@@ -562,11 +566,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.applyCh = applyCh
+	rf.killCh = make(chan bool)
 
 	if DEBUG {
-		rf.logger = log.New(os.Stderr, "", log.Ltime)
+		rf.logger = log.New(os.Stderr, "", log.Ltime|log.Lmicroseconds)
 	} else {
-		rf.logger = log.New(io.Discard, "", log.Ltime)
+		rf.logger = log.New(io.Discard, "", log.Ltime|log.Lmicroseconds)
 	}
 
 	rf.currentTerm = 0
@@ -594,6 +599,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.longrun()
 
 	return rf
+}
+
+func (rf *Raft) hasKilled() bool {
+	select {
+	case <-rf.killCh:
+		return true
+	default:
+		return false
+	}
 }
 
 // If there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm: set commitIndex = N
@@ -671,22 +685,44 @@ func (rf *Raft) WithLock(f func()) {
 }
 
 func (rf *Raft) longrun() {
+	rf.Log("Long running...")
 	go func(rf *Raft) {
 		for {
-			<-rf.electionTimer.C
-			go rf.election()
+			select {
+			case <-rf.electionTimer.C:
+				go func() {
+					if rf.hasKilled() {
+						return
+					}
+					rf.election()
+				}()
+			case <-rf.killCh:
+				return
+			}
 		}
 	}(rf)
 
 	go func(rf *Raft) {
 		for {
-			<-rf.heartbeatTimer.C
-			go rf.heartbeat()
+			select {
+			case <-rf.heartbeatTimer.C:
+				go func() {
+					if rf.hasKilled() {
+						return
+					}
+					rf.heartbeat()
+				}()
+			case <-rf.killCh:
+				return
+			}
 		}
 	}(rf)
 
 	go func(rf *Raft) {
 		for {
+			if rf.hasKilled() {
+				return
+			}
 			rf.apply()
 		}
 	}(rf)

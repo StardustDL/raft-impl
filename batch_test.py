@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
 from typing import List, Tuple
+import argparse
 
 ROOT = pathlib.Path(__file__).parent
 RAFT_ROOT = ROOT.joinpath("src").joinpath("raft")
@@ -122,33 +123,36 @@ def testall(id: str, names: List[str], cnt: int = 10, workers=None, flags="H"):
         passed = test(id, name, cnt, workers, flags)
         result[name] = passed
     items = list(result.items())
-    items.sort(key=lambda x:(x[1], x[0]))
-    resultlogs = "\n".join((f"{k}: {int(v/cnt*10000)/100}% ({v}/{cnt})" for k, v in items))
+    items.sort(key=lambda x: (x[1], x[0]))
+    resultlogs = "\n".join(
+        (f"{k}: {int(v/cnt*10000)/100}% ({v}/{cnt})" for k, v in items))
     LOG_ROOT.joinpath(id).joinpath(
         f"result.log").write_text(resultlogs + "\n")
     print(resultlogs)
 
 
 def main():
-    argv = sys.argv[1:]
-    if len(argv) == 0:
-        print("No arguments")
-        return
-    name = argv[0].lower()
-    cnt = int(argv[1]) if len(argv) >= 2 else 10
-    workers = int(argv[2]) if len(argv) >= 3 else None
-    flags = argv[3] if len(argv) >= 4 else "H"
-    if flags.lower() == "none":
-        flags = ""
-    if name in TESTS:
-        names = TESTS[name]
-    else:
-        names = [name]
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("name", choices=list(TESTS))
+    parser.add_argument("-c", "--count", default=10, type=int)
+    parser.add_argument("-f", "--flag", default="H")
+    parser.add_argument("-w", "--worker", default=None,
+                        type=lambda x: int(x) if x else None)
+
+    args = parser.parse_args()
+
+    name = args.name
+    cnt = args.count
+    workers = args.worker
+    flags = args.flag
+    names = TESTS[name]
 
     now = datetime.now()
     id = now.strftime("%Y-%m-%dT%H-%M-%S")
 
-    testall(f"{argv[0]}-{id}", names, cnt, workers, flags)
+    testall(f"{name}-{id}", names, cnt, workers, flags)
 
 
 if __name__ == "__main__":
