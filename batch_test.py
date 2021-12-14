@@ -40,8 +40,8 @@ TESTS = {
     "lab3": LAB3,
     "lab": LAB,
     "all": ALL_TESTS,
-    **{str(k): v for k, v in enumerate(ALL_TESTS)},
-    ** {v.lower(): v for v in ALL_TESTS}
+    **{str(k): [v] for k, v in enumerate(ALL_TESTS)},
+    ** {v.lower(): [v] for v in ALL_TESTS}
 }
 
 if not LOG_ROOT.exists():
@@ -51,14 +51,14 @@ if not LOG_ROOT.exists():
 TIMEOUT_RET = 99
 
 
-def runtest(name: str, logroot: pathlib.Path, id: str) -> Tuple[bool, timedelta]:
+def runtest(name: str, logroot: pathlib.Path, id: str, flags: str) -> Tuple[bool, timedelta]:
     start = time.time()
     retcode = 0
     stdout = ""
     try:
         # Enable heartbeat log and persist
         result = subprocess.run(["go", "test", "-run", name], cwd=RAFT_ROOT, stdout=subprocess.PIPE, env={
-                                **os.environ, "DEBUG": "H"}, text=True, encoding="utf-8", timeout=3*60)
+                                **os.environ, "DEBUG": flags}, text=True, encoding="utf-8", timeout=3*60)
         retcode = result.returncode
         stdout = result.stdout
     except subprocess.TimeoutExpired as ex:
@@ -77,10 +77,10 @@ def runtest(name: str, logroot: pathlib.Path, id: str) -> Tuple[bool, timedelta]
 
 
 def paralleltest(args: Tuple[str, str, str]) -> Tuple[bool, timedelta]:
-    id, name, i = args
+    id, name, i, flags = args
     prompt = f"{id}: Test {name} ({i})"
     print(f"{prompt}...")
-    ispass, tm = runtest(name, LOG_ROOT.joinpath(id), f"{i}")
+    ispass, tm = runtest(name, LOG_ROOT.joinpath(id), f"{i}", flags)
     if ispass:
         print(f"{prompt} {tm}")
     else:
@@ -88,12 +88,12 @@ def paralleltest(args: Tuple[str, str, str]) -> Tuple[bool, timedelta]:
     return ispass, tm
 
 
-def test(id: str, name: str, cnt: int = 10, workers=None) -> int:
+def test(id: str, name: str, cnt: int = 10, workers=None, flags="H") -> int:
     now = datetime.now()
 
     with ProcessPoolExecutor(workers) as pool:
         results = list(
-            pool.map(paralleltest, [(id, name, i) for i in range(cnt)]))
+            pool.map(paralleltest, [(id, name, i, flags) for i in range(cnt)]))
 
     passed = sum((1 for p in results if p[0]))
 
@@ -113,13 +113,13 @@ def test(id: str, name: str, cnt: int = 10, workers=None) -> int:
     return passed
 
 
-def testall(id: str, names: List[str], cnt: int = 10, workers=None):
+def testall(id: str, names: List[str], cnt: int = 10, workers=None, flags="H"):
     result = {}
     logroot = LOG_ROOT.joinpath(id)
     if not logroot.exists():
         os.makedirs(logroot)
     for name in names:
-        passed = test(id, name, cnt, workers)
+        passed = test(id, name, cnt, workers, flags)
         result[name] = passed
     items = list(result.items())
     items.sort(key=lambda x:(x[1], x[0]))
@@ -137,6 +137,9 @@ def main():
     name = argv[0].lower()
     cnt = int(argv[1]) if len(argv) >= 2 else 10
     workers = int(argv[2]) if len(argv) >= 3 else None
+    flags = argv[3] if len(argv) >= 4 else "H"
+    if flags.lower() == "none":
+        flags = ""
     if name in TESTS:
         names = TESTS[name]
     else:
@@ -145,7 +148,7 @@ def main():
     now = datetime.now()
     id = now.strftime("%Y-%m-%dT%H-%M-%S")
 
-    testall(f"{argv[0]}-{id}", names, cnt, workers)
+    testall(f"{argv[0]}-{id}", names, cnt, workers, flags)
 
 
 if __name__ == "__main__":

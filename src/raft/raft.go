@@ -339,14 +339,19 @@ func (rf *Raft) Log(format string, v ...interface{}) {
 		return
 	}
 
-	role := "follower"
+	role := "follow"
 	switch rf.role {
 	case candidate:
-		role = "candidate"
+		role = "candid"
 	case leader:
 		role = "leader"
 	}
-	rf.logger.Printf("%d[%d:%s]: %s\n", rf.me, rf.currentTerm, role, fmt.Sprintf(format, v...))
+	lastLogIndex := len(rf.logs) - 1
+	lastLogIndexStr := fmt.Sprintf("%d", lastLogIndex)
+	if lastLogIndex < 0 {
+		lastLogIndexStr = "?"
+	}
+	rf.logger.Printf("%d(%s)[%d,%d>%d>%s]: %s\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, lastLogIndexStr, fmt.Sprintf(format, v...))
 }
 
 func (rf *Raft) lastLogSignature() (int, int) {
@@ -637,10 +642,13 @@ func (rf *Raft) apply() {
 }
 
 func (rf *Raft) resetElectionTimeout() {
-	rf.electionTimer.Reset(getRandomizedElectionTimeout())
+	timeout := getRandomizedElectionTimeout()
+	rf.Log("%d reset election timeout: %d", rf.me, timeout.Milliseconds())
+	rf.electionTimer.Reset(timeout)
 }
 
 func (rf *Raft) resetHeartbeatTimeout() {
+	rf.Log("%d reset heartbeat timeout: %d", rf.me, heartbeatTimeout.Milliseconds())
 	rf.heartbeatTimer.Reset(heartbeatTimeout)
 }
 
@@ -700,7 +708,7 @@ func (rf *Raft) campaign() {
 		return
 	}
 
-	rf.Log("Campaign")
+	rf.Log("%d campaign at term %d", rf.me, rf.currentTerm+1)
 	for i := range rf.voteGranted {
 		rf.voteGranted[i] = false
 	}
@@ -737,13 +745,13 @@ func (rf *Raft) campaign() {
 			rf.checkFollow(reply)
 			if rf.role == candidate {
 				if reply.VoteGranted {
-					rf.Log("Grated vote from %d", i)
+					rf.Log("%d grated vote from %d at term %d", rf.me, i, rf.currentTerm)
 
 					rf.voteGranted[i] = true
 
 					// If votes received from majority of servers: become leader
 					if rf.isWinner() {
-						rf.Log("Win the election")
+						rf.Log("%d win the election at term %d", rf.me, rf.currentTerm)
 						rf.lead()
 					}
 				}
@@ -764,7 +772,7 @@ func (rf *Raft) follow() {
 	if rf.role == follower {
 		return
 	}
-	rf.Log("Follow")
+	rf.Log("%d follow at term %d", rf.me, rf.currentTerm)
 	rf.role = follower
 
 	rf.votedFor = unvoted
@@ -776,7 +784,7 @@ func (rf *Raft) lead() {
 	if rf.role == leader {
 		return
 	}
-	rf.Log("Lead")
+	rf.Log("%d lead at term %d", rf.me, rf.currentTerm)
 	rf.role = leader
 	lastIndex := len(rf.logs)
 	for i := range rf.nextIndex {
@@ -814,7 +822,7 @@ func (rf *Raft) heartbeat() {
 		return
 	}
 
-	rf.Log("Heartbeat")
+	rf.Log("%d heartbeats at term %d", rf.me, rf.currentTerm)
 
 	for i := range rf.connected {
 		rf.connected[i] = true
@@ -845,7 +853,7 @@ func (rf *Raft) heartbeat() {
 
 			// If lost from majority of servers: become follower
 			if !rf.isConnect() {
-				rf.Log("Disconnected")
+				rf.Log("%d disconnected at term %d", rf.me, rf.currentTerm)
 				rf.follow()
 			}
 
