@@ -53,8 +53,9 @@ def runtest(name: str, logroot: pathlib.Path, id: str) -> Tuple[bool, timedelta]
     retcode = 0
     stdout = ""
     try:
+        # Enable heartbeat log and persist
         result = subprocess.run(["go", "test", "-run", name], cwd=RAFT_ROOT, stdout=subprocess.PIPE, env={
-                                **os.environ, "DEBUG": "1"}, text=True, encoding="utf-8", timeout=3*60)
+                                **os.environ, "DEBUG": "H"}, text=True, encoding="utf-8", timeout=3*60)
         retcode = result.returncode
         stdout = result.stdout
     except subprocess.TimeoutExpired as ex:
@@ -97,7 +98,7 @@ def test(id: str, name: str, cnt: int = 10, workers=None) -> int:
             f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%"]
     logs.extend(
         (f"Case {i}: {'PASSED' if v[0] else 'FAILED'} {v[1]}" for i, v in enumerate(results)))
-    
+
     if passed < cnt:
         logroot = LOG_ROOT.joinpath(id).joinpath(name)
         if not logroot.exists():

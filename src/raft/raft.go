@@ -34,8 +34,9 @@ import (
 // import "bytes"
 // import "encoding/gob"
 
-const (
-	LOG_HEARTBEAT = false
+var (
+	LOG_HEARTBEAT   = false
+	DISABLE_PERSIST = false
 )
 
 const (
@@ -126,6 +127,9 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
+	if DISABLE_PERSIST {
+		return
+	}
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
@@ -139,6 +143,9 @@ func (rf *Raft) persist() {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
+	if DISABLE_PERSIST {
+		return
+	}
 	r := bytes.NewBuffer(data)
 	d := gob.NewDecoder(r)
 	d.Decode(&rf.currentTerm)
@@ -522,7 +529,10 @@ func (rf *Raft) Kill() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 
-	isdebug := os.Getenv("DEBUG") != ""
+	debugEnv := os.Getenv("DEBUG")
+	isdebug := debugEnv != ""
+	LOG_HEARTBEAT = strings.Contains(debugEnv, "H")
+	DISABLE_PERSIST = strings.Contains(debugEnv, "p")
 
 	rf := &Raft{}
 	rf.peers = peers
