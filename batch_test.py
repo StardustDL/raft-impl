@@ -40,7 +40,7 @@ TESTS = {
     "lab3": LAB3,
     "lab": LAB,
     "all": ALL_TESTS,
-    **{str(k): v for k, v in enumerate(ALL_TESTS)}
+    **{str(k): v for k, v in enumerate(ALL_TESTS)},
     ** {v.lower(): v for v in ALL_TESTS}
 }
 
