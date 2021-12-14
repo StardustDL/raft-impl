@@ -230,8 +230,6 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 					rf.logs = append(rf.logs, args.Entries...)
 
-					rf.persist()
-
 					lastNewIndex += len(args.Entries)
 				}
 
@@ -246,6 +244,8 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			}
 		}
 	}
+
+	rf.persist()
 
 	if len(args.Entries) == 0 {
 		rf.Log("Reply Heartbeat from %d: %t", args.LeaderId, reply.Success)
@@ -370,13 +370,14 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote
 	if args.Term >= rf.currentTerm && (rf.votedFor == unvoted || rf.votedFor == args.CandidateId) && rf.isUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		rf.votedFor = args.CandidateId
-		rf.persist()
 
 		// granting vote to candidate
 		rf.resetElectionTimeout()
 
 		reply.VoteGranted = true
 	}
+
+	rf.persist()
 
 	rf.Log("Reply RequestVote from %d: %t", args.CandidateId, reply.VoteGranted)
 }
@@ -682,8 +683,6 @@ func (rf *Raft) campaign() {
 	// Vote for self
 	rf.votedFor = rf.me
 
-	rf.persist()
-
 	// Reset election timer
 	rf.resetElectionTimeout()
 
@@ -725,7 +724,6 @@ func (rf *Raft) campaign() {
 func (rf *Raft) checkFollow(data RpcTransferData) {
 	if data.term() > rf.currentTerm {
 		rf.currentTerm = data.term()
-		rf.persist()
 		rf.follow()
 	}
 }
@@ -738,7 +736,6 @@ func (rf *Raft) follow() {
 	rf.role = follower
 
 	rf.votedFor = unvoted
-	rf.persist()
 
 	rf.resetElectionTimeout()
 }
