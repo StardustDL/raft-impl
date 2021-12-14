@@ -32,13 +32,16 @@ ALL_TESTS = ["InitialElection",
 LAB1 = ALL_TESTS[0:2]
 LAB2 = ALL_TESTS[2:9]
 LAB3 = ALL_TESTS[9:12]
+LAB = ALL_TESTS[0:12]
 
 TESTS = {
     "lab1": LAB1,
     "lab2": LAB2,
     "lab3": LAB3,
+    "lab": LAB,
     "all": ALL_TESTS,
     **{str(k): v for k, v in enumerate(ALL_TESTS)}
+    ** {v.lower(): v for v in ALL_TESTS}
 }
 
 if not LOG_ROOT.exists():
@@ -127,7 +130,7 @@ def main():
     if len(argv) == 0:
         print("No arguments")
         return
-    name = argv[0]
+    name = argv[0].lower()
     cnt = int(argv[1]) if len(argv) >= 2 else 10
     workers = int(argv[2]) if len(argv) >= 3 else None
     if name in TESTS:
