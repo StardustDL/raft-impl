@@ -35,6 +35,7 @@ import (
 // import "encoding/gob"
 
 var (
+	DEBUG           = false
 	LOG_HEARTBEAT   = false
 	DISABLE_PERSIST = false
 )
@@ -101,6 +102,8 @@ type Raft struct {
 
 	nextIndex  []int // for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
 	matchIndex []int // for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
+
+	connected []bool // Can connected to followers
 
 	// Volatile state on candidate
 
@@ -184,7 +187,7 @@ func (data AppendEntriesReply) term() int {
 //
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	if len(args.Entries) == 0 {
-		rf.Log("Recieve Heartbeat from %d: %+v", args.LeaderId, args.Term)
+		rf.Log("Recieve Heartbeat from %d: %+v", args.LeaderId, args)
 	} else {
 		rf.Log("Recieve AppendEntries from %d: from (%d, %d) with %d entries: %+v", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
 	}
@@ -192,7 +195,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	rf.checkFollow(args)
 
 	// If AppendEntries RPC received from new leader: convert to follower
-	if rf.currentTerm == args.Term {
+	if rf.role == candidate && rf.currentTerm == args.Term {
 		rf.follow()
 	}
 
@@ -261,9 +264,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	}
 
 	if len(args.Entries) == 0 {
-		rf.Log("Reply Heartbeat %s to %d : %t", issuccess, args.LeaderId, reply.Success)
+		rf.Log("Reply Heartbeat %s to %d: %+v", issuccess, args.LeaderId, args)
 	} else {
-		rf.Log("Reply AppendEntries %s to %d: from (%d, %d) with %d entries: %t", issuccess, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
+		rf.Log("Reply AppendEntries %s to %d: from (%d, %d) with %d entries: %+v", issuccess, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
 	}
 }
 
@@ -328,6 +331,10 @@ func (data RequestVoteReply) term() int {
 }
 
 func (rf *Raft) Log(format string, v ...interface{}) {
+	if !DEBUG {
+		return
+	}
+
 	if !LOG_HEARTBEAT && strings.Contains(format, "Heartbeat") {
 		return
 	}
@@ -339,7 +346,7 @@ func (rf *Raft) Log(format string, v ...interface{}) {
 	case leader:
 		role = "leader"
 	}
-	rf.logger.Printf("(%s, term: %d) %s\n", role, rf.currentTerm, fmt.Sprintf(format, v...))
+	rf.logger.Printf("%d[%d:%s]: %s\n", rf.me, rf.currentTerm, role, fmt.Sprintf(format, v...))
 }
 
 func (rf *Raft) lastLogSignature() (int, int) {
@@ -509,7 +516,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			}(rf, i)
 		}
 
-		rf.Log("Reply client request %+v: %d.", command, index)
+		rf.Log("Reply client request %+v: %d", command, index)
 	}
 
 	return index, term, isLeader
@@ -522,6 +529,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
+	rf.Log("Killed")
 	// Your code here, if desired.
 }
 
@@ -540,7 +548,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 
 	debugEnv := os.Getenv("DEBUG")
-	isdebug := debugEnv != ""
+	DEBUG = debugEnv != ""
 	LOG_HEARTBEAT = strings.Contains(debugEnv, "H")
 	DISABLE_PERSIST = strings.Contains(debugEnv, "p")
 
@@ -550,10 +558,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.applyCh = applyCh
 
-	if isdebug {
-		rf.logger = log.New(os.Stderr, fmt.Sprintf("Server %d: ", me), log.Ldate|log.Ltime)
+	if DEBUG {
+		rf.logger = log.New(os.Stderr, "", log.Ltime)
 	} else {
-		rf.logger = log.New(io.Discard, fmt.Sprintf("Server %d: ", me), log.Ldate|log.Ltime)
+		rf.logger = log.New(io.Discard, "", log.Ltime)
 	}
 
 	rf.currentTerm = 0
@@ -566,6 +574,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
+	rf.connected = make([]bool, len(peers))
 
 	rf.heartbeatTimer = time.NewTimer(heartbeatTimeout)
 	rf.electionTimer = time.NewTimer(getRandomizedElectionTimeout())
@@ -734,6 +743,7 @@ func (rf *Raft) campaign() {
 
 					// If votes received from majority of servers: become leader
 					if rf.isWinner() {
+						rf.Log("Win the election")
 						rf.lead()
 					}
 				}
@@ -787,6 +797,17 @@ func (rf *Raft) election() {
 	rf.campaign()
 }
 
+// If lost from majority of servers: become follower
+func (rf *Raft) isConnect() bool {
+	connectCount := 0
+	for i, v := range rf.connected {
+		if v || i == rf.me {
+			connectCount++
+		}
+	}
+	return connectCount*2 > len(rf.peers)
+}
+
 // Upon election: send initial empty AppendEntries RPCs (heartbeat) to each server; repeat during idle periods to prevent election timeouts
 func (rf *Raft) heartbeat() {
 	if rf.role != leader {
@@ -794,6 +815,10 @@ func (rf *Raft) heartbeat() {
 	}
 
 	rf.Log("Heartbeat")
+
+	for i := range rf.connected {
+		rf.connected[i] = true
+	}
 
 	for i := range rf.peers {
 		if i == rf.me {
@@ -813,10 +838,26 @@ func (rf *Raft) heartbeat() {
 			}
 
 			ok := false
-			for !ok && rf.role == leader {
-				ok = rf.sendAppendEntries(i, args, &reply)
+			// for !ok && rf.role == leader {
+			ok = rf.sendAppendEntries(i, args, &reply)
+			// }
+			rf.connected[i] = ok
+
+			// If lost from majority of servers: become follower
+			if !rf.isConnect() {
+				rf.Log("Disconnected")
+				rf.follow()
 			}
-			rf.checkFollow(reply)
+
+			if ok {
+				rf.checkFollow(reply)
+
+				if rf.role == leader {
+					if !reply.Success {
+						rf.nextIndex[i]--
+					}
+				}
+			}
 		}(rf, i)
 	}
 
