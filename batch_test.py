@@ -97,13 +97,14 @@ def test(id: str, name: str, cnt: int = 10, workers=None) -> int:
             f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%"]
     logs.extend(
         (f"Case {i}: {'PASSED' if v[0] else 'FAILED'} {v[1]}" for i, v in enumerate(results)))
+    
+    if passed < cnt:
+        logroot = LOG_ROOT.joinpath(id).joinpath(name)
+        if not logroot.exists():
+            os.makedirs(logroot)
 
-    logroot = LOG_ROOT.joinpath(id).joinpath(name)
-    if not logroot.exists():
-        os.makedirs(logroot)
-
-    logroot.joinpath(
-        f"{name}.log").write_text("\n".join(logs))
+        logroot.joinpath(
+            f"{name}.log").write_text("\n".join(logs))
 
     return passed
 
