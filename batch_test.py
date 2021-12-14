@@ -138,7 +138,7 @@ def main():
     now = datetime.now()
     id = now.strftime("%Y-%m-%dT%H-%M-%S")
 
-    testall(id, names, cnt, workers)
+    testall(f"{argv[0]}-{id}", names, cnt, workers)
 
 
 if __name__ == "__main__":
