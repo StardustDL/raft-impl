@@ -260,6 +260,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		}
 	}
 
+	// Updated on stable storage before responding to RPCs
 	rf.persist()
 
 	issuccess := "SUCCESS"
@@ -408,6 +409,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 	}
 
+	// Updated on stable storage before responding to RPCs
 	rf.persist()
 
 	isyes := "YES"
@@ -480,6 +482,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.nextIndex[rf.me] = lastLogIndex + 1
 		rf.matchIndex[rf.me] = lastLogIndex
 
+		// Updated on stable storage before responding to RPCs
+		// > Leader does not responding to RPCs, just send RPCs.
 		rf.persist()
 
 		rf.Unlock()
