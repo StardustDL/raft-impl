@@ -40,11 +40,15 @@ var (
 	DISABLE_PERSIST = false
 )
 
+// Raft’s RPCs typically require the recipient to persist information to stable storage,
+// so the broadcast time may range from 0.5ms to 20ms, depending on storage technology.
+// As a result, the election timeout is likely to be somewhere between 10ms and 500ms.
+
 const (
 	unvoted            = -1
-	heartbeatTimeout   = time.Duration(100) * time.Millisecond
-	electionTimeoutMin = 200 * time.Millisecond
-	electionTimeoutMax = 400 * time.Millisecond
+	heartbeatTimeout   = time.Duration(50) * time.Millisecond
+	electionTimeoutMin = 150 * time.Millisecond
+	electionTimeoutMax = 300 * time.Millisecond
 )
 
 const (
@@ -92,7 +96,7 @@ type Raft struct {
 
 	currentTerm int        // latest term server has seen (initialized to 0 on first boot, increases monotonically)
 	votedFor    int        // candidateId that received vote in current term (or null if none)
-	logs        []LogEntry // log entries
+	logs        []LogEntry // log entries, index from [1..rf.len()]
 
 	// Volatile state on all servers
 
@@ -207,11 +211,11 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	} else { // assume rpc is from current leader
 		// receiving AppendEntries RPC from current leader
 		rf.resetElectionTimeout()
-		if args.PrevLogIndex >= len(rf.logs) {
+		if args.PrevLogIndex > rf.len() {
 			// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 			reply.Success = false
 		} else {
-			if args.PrevLogIndex >= 0 && rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+			if args.PrevLogIndex >= 1 && rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
 				// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 				reply.Success = false
 
@@ -219,14 +223,14 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				// delete the existing entry and all that follow it
 
 				// rf.logs = rf.logs[:args.PrevLogIndex]
-			} else { // args.PrevLogIndex == -1 or rf.logs[args.PrevLogIndex].Term == args.PrevLogTerm
+			} else { // args.PrevLogIndex == 0 or rf.logs[args.PrevLogIndex].Term == args.PrevLogTerm
 				reply.Success = true
 
 				// Append any new entries not already in the log
 
 				firstUnmatch := 0
 
-				for firstUnmatch < len(args.Entries) && args.PrevLogIndex+1+firstUnmatch < len(rf.logs) && rf.logs[args.PrevLogIndex+1+firstUnmatch].Term == args.Entries[firstUnmatch].Term {
+				for firstUnmatch < len(args.Entries) && args.PrevLogIndex+1+firstUnmatch <= rf.len() && rf.logs[args.PrevLogIndex+1+firstUnmatch].Term == args.Entries[firstUnmatch].Term {
 					firstUnmatch++
 				}
 
@@ -235,7 +239,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				lastNewIndex := args.PrevLogIndex + firstUnmatch
 
 				if len(args.Entries) > 0 {
-					if args.PrevLogIndex+1+firstUnmatch < len(rf.logs) {
+					if args.PrevLogIndex+1+firstUnmatch <= rf.len() {
 						rf.logs = rf.logs[:args.PrevLogIndex+1+firstUnmatch]
 					}
 
@@ -347,27 +351,29 @@ func (rf *Raft) Log(format string, v ...interface{}) {
 	case leader:
 		role = "leader"
 	}
-	lastLogIndex := len(rf.logs) - 1
-	lastLogIndexStr := fmt.Sprintf("%d", lastLogIndex)
-	if lastLogIndex < 0 {
-		lastLogIndexStr = "?"
-	}
-	rf.logger.Printf("%d(%s)[%d,%d>%d>%s]: %s\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, lastLogIndexStr, fmt.Sprintf(format, v...))
+	rf.logger.Printf("%d(%s)[%d,%d>%d>%d]: %s\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, rf.len(), fmt.Sprintf(format, v...))
 }
 
+// return length of logs
+func (rf *Raft) len() int {
+	return len(rf.logs) - 1
+}
+
+// return last log entry's index and term
 func (rf *Raft) lastLogSignature() (int, int) {
-	index := len(rf.logs) - 1
+	index := rf.len()
 	term := 0
-	if index >= 0 {
+	if index >= 1 {
 		term = rf.logs[index].Term
 	}
 	return index, term
 }
 
+// return a follower's prev log entry's index and term
 func (rf *Raft) prevLogSignature(server int) (int, int) {
 	index := rf.nextIndex[server] - 1
 	term := 0
-	if index >= 0 {
+	if index >= 1 {
 		term = rf.logs[index].Term
 	}
 	return index, term
@@ -470,7 +476,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.Lock()
 
 		rf.logs = append(rf.logs, entry)
-		lastLogIndex := len(rf.logs) - 1
+		lastLogIndex := rf.len()
 		rf.nextIndex[rf.me] = lastLogIndex + 1
 		rf.matchIndex[rf.me] = lastLogIndex
 
@@ -578,6 +584,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = unvoted
 
 	rf.logs = make([]LogEntry, 0)
+	rf.logs = append(rf.logs, LogEntry{})
 
 	rf.commitIndex = 0
 	rf.lastApplied = 0
@@ -613,10 +620,10 @@ func (rf *Raft) hasKilled() bool {
 // If there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm: set commitIndex = N
 func (rf *Raft) updateCommitIndex() {
 	newIndex := rf.commitIndex + 1
-	for newIndex < len(rf.logs) && rf.logs[newIndex].Term != rf.currentTerm {
+	for newIndex <= rf.len() && rf.logs[newIndex].Term != rf.currentTerm {
 		newIndex++
 	}
-	if newIndex < len(rf.logs) {
+	if newIndex <= rf.len() {
 		matchedCount := 0
 		for _, v := range rf.matchIndex {
 			if v >= newIndex {
@@ -645,13 +652,13 @@ func (rf *Raft) apply() {
 			UseSnapshot: false,
 			Snapshot:    make([]byte, 0),
 		}
-		rf.Log("Applying %d: %+v", cur, msg.Command)
+		rf.Log("Applying %d: %+v", cur, msg)
 
 		rf.applyCh <- msg
 
 		rf.lastApplied = cur
 
-		rf.Log("Applied %d: %+v", cur, msg.Command)
+		rf.Log("Applied %d: %+v", cur, msg)
 	}
 }
 
@@ -822,9 +829,9 @@ func (rf *Raft) lead() {
 	}
 	rf.Log("%d lead at term %d", rf.me, rf.currentTerm)
 	rf.role = leader
-	lastIndex := len(rf.logs)
+	lastIndex := rf.len()
 	for i := range rf.nextIndex {
-		rf.nextIndex[i] = lastIndex
+		rf.nextIndex[i] = lastIndex + 1
 		rf.matchIndex[i] = 0
 	}
 
