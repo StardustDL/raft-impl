@@ -108,7 +108,7 @@ def test(id: str, name: str, cnt: int = 10, workers=None) -> int:
             os.makedirs(logroot)
 
         logroot.joinpath(
-            f"{name}.log").write_text("\n".join(logs))
+            f"{name}.log").write_text("\n".join(logs) + "\n")
 
     return passed
 
@@ -124,7 +124,7 @@ def testall(id: str, names: List[str], cnt: int = 10, workers=None):
     items = list(result.items())
     items.sort(key=lambda x:(x[1], x[0]))
     LOG_ROOT.joinpath(id).joinpath(
-        f"result.log").write_text("\n".join((f"{k}: {int(v/cnt*10000)/100}% ({v}/{cnt})" for k, v in result.items())))
+        f"result.log").write_text("\n".join((f"{k}: {int(v/cnt*10000)/100}% ({v}/{cnt})" for k, v in items)) + "\n")
 
 
 def main():
