@@ -45,16 +45,31 @@ if not LOG_ROOT.exists():
     os.mkdir(LOG_ROOT)
 
 
+TIMEOUT_RET = 99
+
+
 def runtest(name: str, id: str) -> Tuple[bool, timedelta]:
     start = time.time()
-    result = subprocess.run(["go", "test", "-run", name], cwd=RAFT_ROOT, stdout=subprocess.PIPE, env={**os.environ, "DEBUG": "1"}, text=True, encoding="utf-8")
+    retcode = 0
+    stdout = ""
+    try:
+        result = subprocess.run(["go", "test", "-run", name], cwd=RAFT_ROOT, stdout=subprocess.PIPE, env={
+                                **os.environ, "DEBUG": "1"}, text=True, encoding="utf-8", timeout=3*60)
+        retcode = result.returncode
+        stdout = result.stdout
+    except subprocess.TimeoutExpired as ex:
+        retcode = TIMEOUT_RET
+        stdout = ex.stdout
     end = time.time()
-    if result.returncode != 0:
+    if retcode != 0:
         logdir = LOG_ROOT.joinpath(name)
         if not logdir.exists():
             os.mkdir(logdir)
-        logdir.joinpath(f"{id}.out").write_text(result.stdout)
-    return result.returncode == 0, timedelta(seconds=end-start)
+        if retcode == TIMEOUT_RET:
+            logdir.joinpath(f"{id}.err").write_text(stdout)
+        else:
+            logdir.joinpath(f"{id}.out").write_text(stdout)
+    return retcode == 0, timedelta(seconds=end-start)
 
 
 def paralleltest(args: Tuple[str, str]) -> Tuple[bool, timedelta]:
@@ -69,7 +84,7 @@ def paralleltest(args: Tuple[str, str]) -> Tuple[bool, timedelta]:
     return ispass, tm
 
 
-def test(name: str, cnt: int = 10, workers = None):
+def test(name: str, cnt: int = 10, workers=None):
     now = datetime.now()
 
     with ProcessPoolExecutor(workers) as pool:
@@ -77,8 +92,10 @@ def test(name: str, cnt: int = 10, workers = None):
 
     passed = sum((1 for p in results if p))
 
-    logs = [f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%"]
-    logs.extend((f"Case {i}: {'PASSED' if v[0] else 'FAILED'} {v[1]}" for i, v in enumerate(results)))
+    logs = [
+        f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%"]
+    logs.extend(
+        (f"Case {i}: {'PASSED' if v[0] else 'FAILED'} {v[1]}" for i, v in enumerate(results)))
 
     nowstr = now.strftime('%Y-%m-%dT%H-%M-%S')
 
