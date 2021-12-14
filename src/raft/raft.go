@@ -184,9 +184,9 @@ func (data AppendEntriesReply) term() int {
 //
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	if len(args.Entries) == 0 {
-		rf.Log("Recieve Heartbeat from %d (term: %d)", args.LeaderId, args.Term)
+		rf.Log("Recieve Heartbeat from %d: %+v", args.LeaderId, args.Term)
 	} else {
-		rf.Log("Recieve AppendEntries from %d: from (%d, %d) with %d entries", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries))
+		rf.Log("Recieve AppendEntries from %d: from (%d, %d) with %d entries: %+v", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
 	}
 
 	rf.checkFollow(args)
@@ -254,10 +254,16 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 	rf.persist()
 
+	issuccess := "SUCCESS"
+
+	if !reply.Success {
+		issuccess = "FAILED"
+	}
+
 	if len(args.Entries) == 0 {
-		rf.Log("Reply Heartbeat from %d: %t", args.LeaderId, reply.Success)
+		rf.Log("Reply Heartbeat %s to %d : %t", issuccess, args.LeaderId, reply.Success)
 	} else {
-		rf.Log("Reply AppendEntries from %d: from (%d, %d) with %d entries: %t", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
+		rf.Log("Reply AppendEntries %s to %d: from (%d, %d) with %d entries: %t", issuccess, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
 	}
 }
 
@@ -280,16 +286,16 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 //
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	if len(args.Entries) == 0 {
-		rf.Log("Send Heartbeat to %d", server)
+		rf.Log("Send Heartbeat to %d: %+v", server, args)
 	} else {
-		rf.Log("Send AppendEntries from (%d, %d) with %d entries to %d", args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), server)
+		rf.Log("Send AppendEntries from (%d, %d) with %d entries to %d: %+v", args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), server, args)
 	}
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	if !ok {
 		if len(args.Entries) == 0 {
-			rf.Log("Failed to send Heartbeat to %d", server)
+			rf.Log("Failed to send Heartbeat to %d: %+v", server, args)
 		} else {
-			rf.Log("Failed to send AppendEntries from (%d, %d) with %d entries to %d", args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), server)
+			rf.Log("Failed to send AppendEntries from (%d, %d) with %d entries to %d: %+v", args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), server, args)
 		}
 	}
 	return ok
@@ -366,8 +372,7 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 // RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-
-	rf.Log("Recieve RequestVote from %d (term: %d)", args.CandidateId, args.Term)
+	rf.Log("Recieve RequestVote from %d: %+v", args.CandidateId, args)
 
 	rf.checkFollow(args)
 
@@ -386,7 +391,12 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	rf.persist()
 
-	rf.Log("Reply RequestVote from %d: %t", args.CandidateId, reply.VoteGranted)
+	isyes := "YES"
+
+	if !reply.VoteGranted {
+		isyes = "NO"
+	}
+	rf.Log("Reply RequestVote %s to %d: %+v", isyes, args.CandidateId, args)
 }
 
 //
@@ -407,11 +417,11 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
-	rf.Log("Send RequestVote to %d", server)
+	rf.Log("Send RequestVote to %d: %+v", server, args)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 
 	if !ok {
-		rf.Log("Failed to send RequestVote to %d", server)
+		rf.Log("Failed to send RequestVote to %d: %+v", server, args)
 	}
 	return ok
 }
@@ -435,7 +445,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := rf.role == leader
 
 	if isLeader {
-		rf.Log("Recieve client request.")
+		rf.Log("Recieve client request: %+v", command)
 
 		// If command received from client: append entry to local log, respond after entry applied to state machine
 
@@ -499,7 +509,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			}(rf, i)
 		}
 
-		rf.Log("Reply client request: %d.", index)
+		rf.Log("Reply client request %+v: %d.", command, index)
 	}
 
 	return index, term, isLeader
@@ -607,13 +617,13 @@ func (rf *Raft) apply() {
 			UseSnapshot: false,
 			Snapshot:    make([]byte, 0),
 		}
-		rf.Log("Applying: %d", cur)
+		rf.Log("Applying %d: %+v", cur, msg.Command)
 
 		rf.applyCh <- msg
 
 		rf.lastApplied = cur
 
-		rf.Log("Applied: %d", cur)
+		rf.Log("Applied %d: %+v", cur, msg.Command)
 	}
 }
 
@@ -718,6 +728,8 @@ func (rf *Raft) campaign() {
 			rf.checkFollow(reply)
 			if rf.role == candidate {
 				if reply.VoteGranted {
+					rf.Log("Grated vote from %d", i)
+
 					rf.voteGranted[i] = true
 
 					// If votes received from majority of servers: become leader
@@ -780,6 +792,8 @@ func (rf *Raft) heartbeat() {
 	if rf.role != leader {
 		return
 	}
+
+	rf.Log("Heartbeat")
 
 	for i := range rf.peers {
 		if i == rf.me {

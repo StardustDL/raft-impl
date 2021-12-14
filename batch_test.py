@@ -123,8 +123,10 @@ def testall(id: str, names: List[str], cnt: int = 10, workers=None):
         result[name] = passed
     items = list(result.items())
     items.sort(key=lambda x:(x[1], x[0]))
+    resultlogs = "\n".join((f"{k}: {int(v/cnt*10000)/100}% ({v}/{cnt})" for k, v in items))
     LOG_ROOT.joinpath(id).joinpath(
-        f"result.log").write_text("\n".join((f"{k}: {int(v/cnt*10000)/100}% ({v}/{cnt})" for k, v in items)) + "\n")
+        f"result.log").write_text(resultlogs + "\n")
+    print(resultlogs)
 
 
 def main():
