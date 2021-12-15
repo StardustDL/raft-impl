@@ -99,7 +99,7 @@ ok      raft    186.908s
 
 ### Batch Tests
 
-> The results from the command `python ./batch_test.py all -c 100 -w 1`.
+> The result from the command `python ./batch_test.py all -c 100 -w 1`.
 
 ```
 Persist2: 77.0% (77/100)

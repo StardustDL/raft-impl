@@ -254,11 +254,6 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 				reply.Success = false
 
-				// If an existing entry conflicts with a new one (same index but different terms)
-				// delete the existing entry and all that follow it
-
-				// rf.logs = rf.logs[:args.PrevLogIndex]
-
 				if !DISABLE_NEXTINDEX_BIGSTEP {
 					// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
 					// For example, when rejecting an AppendEntries request, the follower
@@ -275,6 +270,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 					reply.ConflictIndex = firstIndex
 				}
 
+				// If an existing entry conflicts with a new one (same index but different terms)
+				// delete the existing entry and all that follow it
+				rf.logs = rf.logs[:args.PrevLogIndex]
 			} else { // args.PrevLogIndex == 0 or rf.logs[args.PrevLogIndex].Term == args.PrevLogTerm
 				reply.Success = true
 
