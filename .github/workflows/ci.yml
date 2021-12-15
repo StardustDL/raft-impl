@@ -17,10 +17,19 @@ jobs:
       with:
         persist-credentials: false
     - name: Lab 1
-      run: pwsh -c ./lab1.ps1
+      run: pwsh -c ./tests/lab1.ps1
     - name: Lab 2
-      run: pwsh -c ./lab2.ps1
+      run: pwsh -c ./tests/lab2.ps1
     - name: Lab 3
-      run: pwsh -c ./lab3.ps1
-    - name: All labs
-      run: pwsh -c ./lab.ps1
+      run: pwsh -c ./tests/lab3.ps1
+    - name: All tests
+      run: pwsh -c ./tests/all.ps1
+    - name: Batch tests
+      run: python3 ./batch_test.py all -w 1
+    - name: Batch results
+      run: cat ./logs/*/result.log
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: logs
+        path: ./logs

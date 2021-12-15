@@ -27,13 +27,16 @@ Run in `GO111MODULE=off` mode.
 
 ```sh
 # Lab 1: Leader Election
-pwsh -c ./lab1.ps1
+pwsh -c ./tests/lab1.ps1
 
 # Lab 2: Log Replication
-pwsh -c ./lab2.ps1
+pwsh -c ./tests/lab2.ps1
 
 # Lab 3: Persistence
-pwsh -c ./lab3.ps1
+pwsh -c ./tests/lab3.ps1
+
+# All tests
+pwsh -c ./tests/all.ps1
 ```
 
 ### Batch Tests
