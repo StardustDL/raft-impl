@@ -102,8 +102,10 @@ ok      raft    186.908s
 > The result from the command `python ./batch_test.py all -c 100 -w 1`.
 
 ```
-Persist2: 77.0% (77/100)
-Backup: 100.0% (100/100)
+Persist2: 75.0% (75/100)
+Figure8: 90.0% (90/100)
+Figure8Unreliable: 94.0% (94/100)
+Backup: 97.0% (97/100)
 BasicAgree: 100.0% (100/100)
 ConcurrentStarts: 100.0% (100/100)
 Count: 100.0% (100/100)
@@ -114,4 +116,7 @@ Persist1: 100.0% (100/100)
 Persist3: 100.0% (100/100)
 ReElection: 100.0% (100/100)
 Rejoin: 100.0% (100/100)
+ReliableChurn: 100.0% (100/100)
+UnreliableAgree: 100.0% (100/100)
+UnreliableChurn: 100.0% (100/100)
 ```
