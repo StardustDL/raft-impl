@@ -57,6 +57,14 @@ const (
 	leader    = 2
 )
 
+func minInt(a int, b int) int {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+
 func getRandomizedElectionTimeout() time.Duration {
 	return electionTimeoutMin + time.Duration(rand.Int63())%(electionTimeoutMax-electionTimeoutMin)
 }
@@ -250,11 +258,8 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 				// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 				if args.LeaderCommit > rf.commitIndex {
-					if args.LeaderCommit < lastNewIndex {
-						rf.commitIndex = args.LeaderCommit
-					} else {
-						rf.commitIndex = lastNewIndex
-					}
+					rf.commitIndex = minInt(args.LeaderCommit, lastNewIndex)
+					rf.Log("Follower commit index updated: %d", rf.commitIndex)
 				}
 			}
 		}
@@ -525,10 +530,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 							// If successful: update nextIndex and matchIndex for follower
 							rf.nextIndex[i] = lastLogIndex + 1
 							rf.matchIndex[i] = lastLogIndex
+							rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							break
 						} else {
 							// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
 							rf.nextIndex[i]--
+							rf.Log("AppendEntries fails because of log inconsistency at %d with term %d, nextIndex -> %d: %+v", args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[i], args)
 						}
 					}
 				}
@@ -637,7 +644,7 @@ func (rf *Raft) updateCommitIndex() {
 		// rf.Log("Index %d matched %d of %d", newIndex, matchedCount, len(rf.peers))
 		if matchedCount*2 > len(rf.peers) {
 			rf.commitIndex = newIndex
-			rf.Log("Commit index updated: %d", newIndex)
+			rf.Log("Leader commit index updated: %d", rf.commitIndex)
 		}
 	}
 }
@@ -792,7 +799,7 @@ func (rf *Raft) campaign() {
 			rf.checkFollow(reply)
 			if rf.role == candidate {
 				if reply.VoteGranted {
-					rf.Log("%d grated vote from %d at term %d", rf.me, i, rf.currentTerm)
+					rf.Log("%d granted vote from %d at term %d", rf.me, i, rf.currentTerm)
 
 					rf.voteGranted[i] = true
 
@@ -801,6 +808,8 @@ func (rf *Raft) campaign() {
 						rf.Log("%d win the election at term %d", rf.me, rf.currentTerm)
 						rf.lead()
 					}
+				} else {
+					rf.Log("%d failed to grant vote from %d at term %d", rf.me, i, rf.currentTerm)
 				}
 			}
 		}(rf, i)
@@ -909,6 +918,8 @@ func (rf *Raft) heartbeat() {
 
 				if rf.role == leader {
 					if !reply.Success {
+						// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+						rf.Log("AppendEntries fails because of log inconsistency at %d with term %d, nextIndex -> %d: %+v", args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[i], args)
 						rf.nextIndex[i]--
 					}
 				}
