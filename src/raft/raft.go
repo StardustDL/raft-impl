@@ -499,54 +499,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 		index = lastLogIndex
 
+		// start log entry sync
 		rf.heartbeat()
-
-		// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
-		//   If successful: update nextIndex and matchIndex for follower
-		//   If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-
-		// for i := range rf.peers {
-		// 	if i == rf.me || lastLogIndex < rf.nextIndex[i] {
-		// 		continue
-		// 	}
-		// 	go func(rf *Raft, i int) {
-		// 		for rf.role == leader {
-		// 			var reply AppendEntriesReply
-
-		// 			index, term := rf.prevLogSignature(i)
-		// 			args := AppendEntriesArgs{
-		// 				Term:         rf.currentTerm,
-		// 				LeaderId:     rf.me,
-		// 				PrevLogIndex: index,
-		// 				PrevLogTerm:  term,
-		// 				Entries:      rf.logs[rf.nextIndex[i]:],
-		// 				LeaderCommit: rf.commitIndex,
-		// 			}
-
-		// 			ok := false
-		// 			for !ok && rf.role == leader {
-		// 				if rf.hasKilled() {
-		// 					return
-		// 				}
-		// 				ok = rf.sendAppendEntries(i, args, &reply)
-		// 			}
-		// 			rf.checkFollow(reply)
-		// 			if rf.role == leader {
-		// 				if reply.Success {
-		// 					// If successful: update nextIndex and matchIndex for follower
-		// 					rf.nextIndex[i] = lastLogIndex + 1
-		// 					rf.matchIndex[i] = lastLogIndex
-		// 					rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
-		// 					break
-		// 				} else {
-		// 					// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-		// 					rf.nextIndex[i]--
-		// 					rf.Log("AppendEntries fails because of log inconsistency at %d with term %d, nextIndex -> %d: %+v", args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[i], args)
-		// 				}
-		// 			}
-		// 		}
-		// 	}(rf, i)
-		// }
 
 		rf.Log("Reply client request %+v: %d", command, index)
 	}
@@ -901,6 +855,9 @@ func (rf *Raft) heartbeat() {
 		}
 		go func(rf *Raft, i int) {
 			for rf.role == leader {
+				if rf.hasKilled() {
+					return
+				}
 				reply := AppendEntriesReply{}
 
 				index, term := rf.prevLogSignature(i)
@@ -915,15 +872,7 @@ func (rf *Raft) heartbeat() {
 				}
 
 				ok := false
-				// for !ok && rf.role == leader {
-				if rf.hasKilled() {
-					return
-				}
 				ok = rf.sendAppendEntries(i, args, &reply)
-				// if args.isheartbeat() {
-				// 	break
-				// }
-				// }
 				rf.connected[i] = ok
 
 				// If lost from majority of servers: become follower
