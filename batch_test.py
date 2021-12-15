@@ -5,8 +5,10 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import argparse
+
+BUILDED_TESTER_NAME = "tester.exe"
 
 ROOT = pathlib.Path(__file__).parent
 RAFT_ROOT = ROOT.joinpath("src").joinpath("raft")
@@ -56,24 +58,28 @@ def runtest(name: str, logroot: pathlib.Path, id: str, flags: str) -> Tuple[bool
     start = time.time()
     retcode = 0
     stdout = ""
+    stderr = ""
+    tester = logroot.joinpath(BUILDED_TESTER_NAME).absolute()
     try:
         # Enable heartbeat log and persist
-        result = subprocess.run(["go", "test", "-run", name], cwd=RAFT_ROOT, stdout=subprocess.PIPE, env={
+        result = subprocess.run([str(tester), "-test.run", name, "-test.v"], cwd=RAFT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={
                                 **os.environ, "DEBUG": flags}, text=True, encoding="utf-8", timeout=3*60)
         retcode = result.returncode
         stdout = result.stdout
+        stderr = result.stderr
     except subprocess.TimeoutExpired as ex:
         retcode = TIMEOUT_RET
         stdout = ex.stdout.decode("utf-8")
+        stderr = ex.stderr.decode("utf-8")
     end = time.time()
     if retcode != 0:
         logdir = logroot.joinpath(name)
         if not logdir.exists():
             os.makedirs(logdir)
         if retcode == TIMEOUT_RET:
-            logdir.joinpath(f"{id}.err").write_text(stdout)
-        else:
-            logdir.joinpath(f"{id}.out").write_text(stdout)
+            stdout += "\n\nTIMEOUT"
+        logdir.joinpath(f"{id}.err").write_text(stderr)
+        logdir.joinpath(f"{id}.out").write_text(stdout)
     return retcode == 0, timedelta(seconds=end-start)
 
 
@@ -89,7 +95,7 @@ def paralleltest(args: Tuple[str, str, str]) -> Tuple[bool, timedelta]:
     return ispass, tm
 
 
-def test(id: str, name: str, cnt: int = 10, workers=None, flags="H") -> int:
+def test(id: str, name: str, cnt: int, workers: Optional[int], flags: str) -> int:
     now = datetime.now()
 
     with ProcessPoolExecutor(workers) as pool:
@@ -100,6 +106,7 @@ def test(id: str, name: str, cnt: int = 10, workers=None, flags="H") -> int:
 
     logs = [f"{id}: {name}, {cnt} cases, {workers} workers, @ {now}",
             f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%"]
+    print("\n".join(logs))
     logs.extend(
         (f"Case {i}: {'PASSED' if v[0] else 'FAILED'} {v[1]}" for i, v in enumerate(results)))
 
@@ -109,16 +116,22 @@ def test(id: str, name: str, cnt: int = 10, workers=None, flags="H") -> int:
             os.makedirs(logroot)
 
         logroot.joinpath(
-            f"{name}.log").write_text("\n".join(logs) + "\n")
+            f"result.log").write_text("\n".join(logs) + "\n")
 
     return passed
 
 
-def testall(id: str, names: List[str], cnt: int = 10, workers=None, flags="H"):
+def testall(id: str, names: List[str], cnt: int, workers: Optional[int], flags: str):
     result = {}
     logroot = LOG_ROOT.joinpath(id)
     if not logroot.exists():
         os.makedirs(logroot)
+
+    testerPath = logroot.joinpath(BUILDED_TESTER_NAME).absolute()
+    print(f"Building tester -> {testerPath}...")
+    subprocess.check_call(
+        ["go", "test", "-c", "-o", str(testerPath)], cwd=RAFT_ROOT)
+
     for name in names:
         passed = test(id, name, cnt, workers, flags)
         result[name] = passed
@@ -137,7 +150,7 @@ def main():
 
     parser.add_argument("name", choices=list(TESTS))
     parser.add_argument("-c", "--count", default=10, type=int)
-    parser.add_argument("-f", "--flag", default="H")
+    parser.add_argument("-f", "--flag", default="HT")
     parser.add_argument("-w", "--worker", default=None,
                         type=lambda x: int(x) if x else None)
 

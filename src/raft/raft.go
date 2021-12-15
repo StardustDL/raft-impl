@@ -35,9 +35,11 @@ import (
 // import "encoding/gob"
 
 var (
-	DEBUG           = false
-	LOG_HEARTBEAT   = false
-	DISABLE_PERSIST = false
+	DEBUG                     = false
+	LOG_HEARTBEAT             = false
+	LOG_TIMEOUT               = false
+	DISABLE_PERSIST           = false
+	DISABLE_NEXTINDEX_BIGSTEP = false // disable the optimization for big step to decrease nextIndex
 )
 
 // Raft’s RPCs typically require the recipient to persist information to stable storage,
@@ -45,10 +47,11 @@ var (
 // As a result, the election timeout is likely to be somewhere between 10ms and 500ms.
 
 const (
-	unvoted            = -1
-	heartbeatTimeout   = time.Duration(50) * time.Millisecond
-	electionTimeoutMin = 150 * time.Millisecond
-	electionTimeoutMax = 300 * time.Millisecond
+	unvoted              = -1
+	notfoundConflictTerm = -1
+	heartbeatTimeout     = time.Duration(50) * time.Millisecond
+	electionTimeoutMin   = 150 * time.Millisecond
+	electionTimeoutMax   = 300 * time.Millisecond
 )
 
 const (
@@ -190,9 +193,20 @@ func (data AppendEntriesArgs) isheartbeat() bool {
 	return len(data.Entries) == 0
 }
 
+// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
+// For example, when rejecting an AppendEntries request, the follower
+// can include the term of the conflicting entry
+// and the first index it stores for that term.
+// With this information, the leader can decrement nextIndex to bypass all of the conflicting entries in that term;
+// one AppendEntries RPC will be required for each term with conflicting entries,
+// rather than one RPC per entry.
+// In practice, we doubt this optimization is necessary, since failures happen infrequently and it is unlikely that there will be many inconsistent entries.
+
 type AppendEntriesReply struct {
-	Term    int  // currentTerm, for leader to update itself
-	Success bool // true if follower contained entry matching prevLogIndex and prevLogTerm
+	Term          int  // currentTerm, for leader to update itself
+	Success       bool // true if follower contained entry matching prevLogIndex and prevLogTerm
+	ConflictTerm  int  // the term of the conflicting entry if failed
+	ConflictIndex int  // the first index it stores for that term
 }
 
 func (data AppendEntriesReply) term() int {
@@ -226,6 +240,15 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		if args.PrevLogIndex > rf.len() {
 			// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 			reply.Success = false
+
+			if !DISABLE_NEXTINDEX_BIGSTEP {
+				// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
+				// For example, when rejecting an AppendEntries request, the follower
+				// can include the term of the conflicting entry
+				// and the first index it stores for that term.
+				reply.ConflictIndex = rf.len() + 1
+				reply.ConflictTerm = notfoundConflictTerm
+			}
 		} else {
 			if args.PrevLogIndex >= 1 && rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
 				// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
@@ -235,6 +258,23 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				// delete the existing entry and all that follow it
 
 				// rf.logs = rf.logs[:args.PrevLogIndex]
+
+				if !DISABLE_NEXTINDEX_BIGSTEP {
+					// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
+					// For example, when rejecting an AppendEntries request, the follower
+					// can include the term of the conflicting entry
+					// and the first index it stores for that term.
+
+					reply.ConflictTerm = rf.logs[args.PrevLogIndex].Term
+
+					firstIndex := args.PrevLogIndex
+					for firstIndex-1 >= 1 && rf.logs[firstIndex-1].Term == reply.ConflictTerm {
+						firstIndex--
+					}
+
+					reply.ConflictIndex = firstIndex
+				}
+
 			} else { // args.PrevLogIndex == 0 or rf.logs[args.PrevLogIndex].Term == args.PrevLogTerm
 				reply.Success = true
 
@@ -354,6 +394,10 @@ func (rf *Raft) Log(format string, v ...interface{}) {
 	}
 
 	if !LOG_HEARTBEAT && strings.Contains(format, "Heartbeat") {
+		return
+	}
+
+	if !LOG_TIMEOUT && strings.Contains(format, "timeout") {
 		return
 	}
 
@@ -540,6 +584,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	DEBUG = debugEnv != ""
 	LOG_HEARTBEAT = strings.Contains(debugEnv, "H")
 	DISABLE_PERSIST = strings.Contains(debugEnv, "p")
+	DISABLE_NEXTINDEX_BIGSTEP = strings.Contains(debugEnv, "b")
+	LOG_TIMEOUT = strings.Contains(debugEnv, "T")
 
 	rf := &Raft{}
 	rf.peers = peers
@@ -867,7 +913,7 @@ func (rf *Raft) heartbeat() {
 					LeaderId:     rf.me,
 					PrevLogIndex: index,
 					PrevLogTerm:  term,
-					Entries:      rf.logs[rf.nextIndex[i]:],
+					Entries:      rf.logs[index+1:],
 					LeaderCommit: rf.commitIndex,
 				}
 
@@ -904,8 +950,35 @@ func (rf *Raft) heartbeat() {
 							break
 						} else {
 							// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-							rf.nextIndex[i]--
-							rf.Log("AppendEntries fails because of log inconsistency at %d with term %d, nextIndex -> %d: %+v", args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[i], args)
+							rf.Log("AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+
+							newNextIndex := index
+
+							if !DISABLE_NEXTINDEX_BIGSTEP {
+								// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
+								// For example, when rejecting an AppendEntries request, the follower
+								// can include the term of the conflicting entry
+								// and the first index it stores for that term.
+								// With this information, the leader can decrement nextIndex to bypass all of the conflicting entries in that term;
+								// one AppendEntries RPC will be required for each term with conflicting entries,
+								// rather than one RPC per entry.
+								// In practice, we doubt this optimization is necessary, since failures happen infrequently and it is unlikely that there will be many inconsistent entries.
+
+								newNextIndex = reply.ConflictIndex
+								if reply.ConflictTerm != notfoundConflictTerm {
+									for newNextIndex <= rf.len() && rf.logs[newNextIndex].Term == reply.ConflictTerm {
+										newNextIndex++
+									}
+								}
+							}
+
+							if newNextIndex < rf.nextIndex[i] {
+								rf.nextIndex[i] = newNextIndex
+								rf.Log("nextIndex[%d] -> %d", i, rf.nextIndex[i])
+							} else { // another coroutine has changed nextIndex[i] to smaller
+								rf.Log("nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
+								break
+							}
 						}
 					}
 				} else {

@@ -6,7 +6,7 @@ A demo 1-to-1 implementation in Golang for Raft Consensus algorithm according to
 - Log Replication
 - Persistence
 
-## Run
+## Testing
 
 ```sh
 cd src/raft
@@ -14,11 +14,14 @@ go test
 ```
 
 The project detect a runtime environment variable **`DEBUG`**.
-- Enable debug mode and logging, if it exists and it is not empty.
-- Enable heartbeat logging, if it contains `H`.
-- Disable persisting, if it contains `p`.
 
-## Group Tests
+- Enable debug mode and logging, if it exists and it is not empty (any non-empty values is OK).
+- Enable heartbeat logging, if it contains `H`.
+- Enable timer logging, if it contains `T`.
+- Disable persisting, if it contains `p`.
+- Disable the optimization for big step to decrease nextIndex, if it contains `b`
+
+### Group Tests
 
 Run in `GO111MODULE=off` mode.
 
@@ -33,17 +36,24 @@ pwsh -c ./lab2.ps1
 pwsh -c ./lab3.ps1
 ```
 
-## Batch Tests
+### Batch Tests
 
 ```sh
-python ./batch_test.py "test suite name" [-c <replication count=10>] [-f <DEBUG Flags="H">] [-w <parallelism=the number of CPU cores>]
+python ./batch_test.py "test collection name"
+  [-c <replication count=10>]
+  [-f <DEBUG Flags="HT">]
+  [-w <parallelism=the number of CPU cores>]
 ```
 
 Suggest set `-w 1` to use serial testing since some tests will fail when run them parallel.
 
 The result will be under the directory `logs`. All failed tests' logs will be recorded.
 
-## Test Results
+## Results
+
+### Single Test
+
+> The output from the command `go test`.
 
 ```
 Test: initial election ...
@@ -75,13 +85,16 @@ Test: Figure 8 ...
 Test: unreliable agreement ...
   ... Passed
 Test: Figure 8 (unreliable) ...
---- FAIL: TestFigure8Unreliable (56.23s)
-    config.go:424: one(4794) failed to reach agreement
+  ... Passed
 Test: churn ...
   ... Passed
 Test: unreliable churn ...
   ... Passed
-FAIL
-exit status 1
-FAIL    raft    193.396s
+PASS
+ok      raft    186.908s
 ```
+
+### Batch Tests
+
+> The output from the command `python ./batch_test.py all -c 100 -w 1`.
+
