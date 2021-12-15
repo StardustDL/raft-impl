@@ -96,5 +96,19 @@ ok      raft    186.908s
 
 ### Batch Tests
 
-> The output from the command `python ./batch_test.py all -c 100 -w 1`.
+> The results from the command `python ./batch_test.py all -c 100 -w 1`.
 
+```
+Persist2: 77.0% (77/100)
+Backup: 100.0% (100/100)
+BasicAgree: 100.0% (100/100)
+ConcurrentStarts: 100.0% (100/100)
+Count: 100.0% (100/100)
+FailAgree: 100.0% (100/100)
+FailNoAgree: 100.0% (100/100)
+InitialElection: 100.0% (100/100)
+Persist1: 100.0% (100/100)
+Persist3: 100.0% (100/100)
+ReElection: 100.0% (100/100)
+Rejoin: 100.0% (100/100)
+```
