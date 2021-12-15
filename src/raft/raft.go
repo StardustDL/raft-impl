@@ -840,8 +840,6 @@ func (rf *Raft) follow() {
 	rf.role = follower
 
 	rf.votedFor = unvoted
-
-	rf.resetElectionTimeout()
 }
 
 func (rf *Raft) lead() {
