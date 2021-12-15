@@ -186,6 +186,10 @@ func (data AppendEntriesArgs) term() int {
 	return data.Term
 }
 
+func (data AppendEntriesArgs) isheartbeat() bool {
+	return len(data.Entries) == 0
+}
+
 type AppendEntriesReply struct {
 	Term    int  // currentTerm, for leader to update itself
 	Success bool // true if follower contained entry matching prevLogIndex and prevLogTerm
@@ -199,7 +203,7 @@ func (data AppendEntriesReply) term() int {
 // AppendEntries RPC handler.
 //
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
-	if len(args.Entries) == 0 {
+	if args.isheartbeat() {
 		rf.Log("Recieve Heartbeat from %d: %+v", args.LeaderId, args)
 	} else {
 		rf.Log("Recieve AppendEntries from %d: from (%d, %d) with %d entries: %+v", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
@@ -274,7 +278,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		issuccess = "FAILED"
 	}
 
-	if len(args.Entries) == 0 {
+	if args.isheartbeat() {
 		rf.Log("Reply Heartbeat %s to %d: %+v", issuccess, args.LeaderId, args)
 	} else {
 		rf.Log("Reply AppendEntries %s to %d: from (%d, %d) with %d entries: %+v", issuccess, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
@@ -495,52 +499,54 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 		index = lastLogIndex
 
+		rf.heartbeat()
+
 		// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
 		//   If successful: update nextIndex and matchIndex for follower
 		//   If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
 
-		for i := range rf.peers {
-			if i == rf.me || lastLogIndex < rf.nextIndex[i] {
-				continue
-			}
-			go func(rf *Raft, i int) {
-				for rf.role == leader {
-					var reply AppendEntriesReply
+		// for i := range rf.peers {
+		// 	if i == rf.me || lastLogIndex < rf.nextIndex[i] {
+		// 		continue
+		// 	}
+		// 	go func(rf *Raft, i int) {
+		// 		for rf.role == leader {
+		// 			var reply AppendEntriesReply
 
-					index, term := rf.prevLogSignature(i)
-					args := AppendEntriesArgs{
-						Term:         rf.currentTerm,
-						LeaderId:     rf.me,
-						PrevLogIndex: index,
-						PrevLogTerm:  term,
-						Entries:      rf.logs[rf.nextIndex[i]:],
-						LeaderCommit: rf.commitIndex,
-					}
+		// 			index, term := rf.prevLogSignature(i)
+		// 			args := AppendEntriesArgs{
+		// 				Term:         rf.currentTerm,
+		// 				LeaderId:     rf.me,
+		// 				PrevLogIndex: index,
+		// 				PrevLogTerm:  term,
+		// 				Entries:      rf.logs[rf.nextIndex[i]:],
+		// 				LeaderCommit: rf.commitIndex,
+		// 			}
 
-					ok := false
-					for !ok && rf.role == leader {
-						if rf.hasKilled() {
-							return
-						}
-						ok = rf.sendAppendEntries(i, args, &reply)
-					}
-					rf.checkFollow(reply)
-					if rf.role == leader {
-						if reply.Success {
-							// If successful: update nextIndex and matchIndex for follower
-							rf.nextIndex[i] = lastLogIndex + 1
-							rf.matchIndex[i] = lastLogIndex
-							rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
-							break
-						} else {
-							// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-							rf.nextIndex[i]--
-							rf.Log("AppendEntries fails because of log inconsistency at %d with term %d, nextIndex -> %d: %+v", args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[i], args)
-						}
-					}
-				}
-			}(rf, i)
-		}
+		// 			ok := false
+		// 			for !ok && rf.role == leader {
+		// 				if rf.hasKilled() {
+		// 					return
+		// 				}
+		// 				ok = rf.sendAppendEntries(i, args, &reply)
+		// 			}
+		// 			rf.checkFollow(reply)
+		// 			if rf.role == leader {
+		// 				if reply.Success {
+		// 					// If successful: update nextIndex and matchIndex for follower
+		// 					rf.nextIndex[i] = lastLogIndex + 1
+		// 					rf.matchIndex[i] = lastLogIndex
+		// 					rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+		// 					break
+		// 				} else {
+		// 					// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+		// 					rf.nextIndex[i]--
+		// 					rf.Log("AppendEntries fails because of log inconsistency at %d with term %d, nextIndex -> %d: %+v", args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[i], args)
+		// 				}
+		// 			}
+		// 		}
+		// 	}(rf, i)
+		// }
 
 		rf.Log("Reply client request %+v: %d", command, index)
 	}
@@ -783,7 +789,8 @@ func (rf *Raft) campaign() {
 			continue
 		}
 		go func(rf *Raft, i int) {
-			var reply RequestVoteReply
+			reply := RequestVoteReply{}
+
 			index, term := rf.lastLogSignature()
 			args := RequestVoteArgs{
 				Term:         rf.currentTerm,
@@ -862,7 +869,7 @@ func (rf *Raft) election() {
 }
 
 // If lost from majority of servers: become follower
-func (rf *Raft) isConnect() bool {
+func (rf *Raft) isConnected() bool {
 	connectCount := 0
 	for i, v := range rf.connected {
 		if v || i == rf.me {
@@ -884,43 +891,77 @@ func (rf *Raft) heartbeat() {
 		rf.connected[i] = true
 	}
 
+	// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
+	//   If successful: update nextIndex and matchIndex for follower
+	//   If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
 		}
 		go func(rf *Raft, i int) {
-			var reply AppendEntriesReply
+			for rf.role == leader {
+				reply := AppendEntriesReply{}
 
-			index, term := rf.prevLogSignature(i)
-			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: index,
-				PrevLogTerm:  term,
-				Entries:      make([]LogEntry, 0),
-				LeaderCommit: rf.commitIndex,
-			}
+				index, term := rf.prevLogSignature(i)
+				lastLogIndex := rf.len()
+				args := AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderId:     rf.me,
+					PrevLogIndex: index,
+					PrevLogTerm:  term,
+					Entries:      rf.logs[rf.nextIndex[i]:],
+					LeaderCommit: rf.commitIndex,
+				}
 
-			ok := false
-			// for !ok && rf.role == leader {
-			ok = rf.sendAppendEntries(i, args, &reply)
-			// }
-			rf.connected[i] = ok
+				ok := false
+				// for !ok && rf.role == leader {
+				if rf.hasKilled() {
+					return
+				}
+				ok = rf.sendAppendEntries(i, args, &reply)
+				// if args.isheartbeat() {
+				// 	break
+				// }
+				// }
+				rf.connected[i] = ok
 
-			// If lost from majority of servers: become follower
-			if !rf.isConnect() {
-				rf.Log("%d disconnected at term %d", rf.me, rf.currentTerm)
-				rf.follow()
-			}
+				// If lost from majority of servers: become follower
+				if !rf.isConnected() {
+					rf.Log("%d disconnected at term %d", rf.me, rf.currentTerm)
+					rf.follow()
+				}
 
-			if ok {
-				rf.checkFollow(reply)
+				// Sended
+				//	 Success -> break
+				//   Fail
+				//	   heartbeat -> retry
+				//     normal -> retry
+				// Unsended
+				//   heartbeat -> break
+				//   normal -> retry
 
-				if rf.role == leader {
-					if !reply.Success {
-						// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-						rf.Log("AppendEntries fails because of log inconsistency at %d with term %d, nextIndex -> %d: %+v", args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[i], args)
-						rf.nextIndex[i]--
+				if ok {
+					rf.checkFollow(reply)
+
+					if rf.role == leader {
+						if reply.Success {
+							// If successful: update nextIndex and matchIndex for follower
+							if !args.isheartbeat() {
+								rf.nextIndex[i] = lastLogIndex + 1
+								rf.matchIndex[i] = lastLogIndex
+							}
+							rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+							break
+						} else {
+							// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+							rf.nextIndex[i]--
+							rf.Log("AppendEntries fails because of log inconsistency at %d with term %d, nextIndex -> %d: %+v", args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[i], args)
+						}
+					}
+				} else {
+					if args.isheartbeat() {
+						break
 					}
 				}
 			}
