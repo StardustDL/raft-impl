@@ -240,6 +240,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 				// Append any new entries not already in the log
 
+				// If an existing entry conflicts with a new one (same index but different terms)
+				// delete the existing entry and all that follow it
+
 				firstUnmatch := 0
 
 				for firstUnmatch < len(args.Entries) && args.PrevLogIndex+1+firstUnmatch <= rf.len() && rf.logs[args.PrevLogIndex+1+firstUnmatch].Term == args.Entries[firstUnmatch].Term {
@@ -804,9 +807,10 @@ func (rf *Raft) lead() {
 	rf.Log("%d lead at term %d", rf.me, rf.currentTerm)
 	rf.role = leader
 	lastIndex := rf.len()
-	for i := range rf.nextIndex {
+	for i := range rf.peers {
 		rf.nextIndex[i] = lastIndex + 1
 		rf.matchIndex[i] = 0
+		rf.connected[i] = true
 	}
 
 	// Upon election: send heartbeat to each server to prevent election timeouts
@@ -840,10 +844,6 @@ func (rf *Raft) heartbeat() {
 	}
 
 	rf.Log("%d heartbeats at term %d", rf.me, rf.currentTerm)
-
-	for i := range rf.connected {
-		rf.connected[i] = true
-	}
 
 	// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
 	//   If successful: update nextIndex and matchIndex for follower
