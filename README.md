@@ -101,24 +101,24 @@ ok      raft    186.908s
 
 ### Batch Tests
 
-> The result from the command `python ./batch_test.py all -c 100 -w 1`.
+> The result from the command `python ./batch_test.py all -c 200 -w 1`.
 
 ```
-Persist2: 75.0% (75/100)
-Figure8: 90.0% (90/100)
-Figure8Unreliable: 94.0% (94/100)
-Backup: 97.0% (97/100)
-BasicAgree: 100.0% (100/100)
-ConcurrentStarts: 100.0% (100/100)
-Count: 100.0% (100/100)
-FailAgree: 100.0% (100/100)
-FailNoAgree: 100.0% (100/100)
-InitialElection: 100.0% (100/100)
-Persist1: 100.0% (100/100)
-Persist3: 100.0% (100/100)
-ReElection: 100.0% (100/100)
-Rejoin: 100.0% (100/100)
-ReliableChurn: 100.0% (100/100)
-UnreliableAgree: 100.0% (100/100)
-UnreliableChurn: 100.0% (100/100)
+Figure8Unreliable: 72.0% (144/200)
+Figure8: 73.5% (147/200)
+ReliableChurn: 99.5% (199/200)
+Backup: 100.0% (200/200)
+BasicAgree: 100.0% (200/200)
+ConcurrentStarts: 100.0% (200/200)
+Count: 100.0% (200/200)
+FailAgree: 100.0% (200/200)
+FailNoAgree: 100.0% (200/200)
+InitialElection: 100.0% (200/200)
+Persist1: 100.0% (200/200)
+Persist2: 100.0% (200/200)
+Persist3: 100.0% (200/200)
+ReElection: 100.0% (200/200)
+Rejoin: 100.0% (200/200)
+UnreliableAgree: 100.0% (200/200)
+UnreliableChurn: 100.0% (200/200)
 ```
