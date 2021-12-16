@@ -62,7 +62,7 @@ def runtest(name: str, logroot: pathlib.Path, id: str, flags: str) -> Tuple[bool
     tester = logroot.joinpath(BUILDED_TESTER_NAME).absolute()
     try:
         # Enable heartbeat log and persist
-        result = subprocess.run([str(tester), "-test.run", name, "-test.v"], cwd=RAFT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={
+        result = subprocess.run([str(tester), "-test.run", f"{name}$", "-test.v"], cwd=RAFT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={
                                 **os.environ, "DEBUG": flags}, text=True, encoding="utf-8", timeout=3*60)
         retcode = result.returncode
         stdout = result.stdout
