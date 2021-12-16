@@ -24,6 +24,7 @@ import (
 	"io"
 	"labrpc"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"strings"
@@ -287,17 +288,21 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 					firstUnmatch++
 				}
 
-				args.Entries = args.Entries[firstUnmatch:]
+				if firstUnmatch <= len(args.Entries) {
+					args.Entries = args.Entries[firstUnmatch:]
+				}
 
-				lastNewIndex := args.PrevLogIndex + firstUnmatch
+				lastNewIndex := math.MaxInt
 
 				if len(args.Entries) > 0 {
-					if args.PrevLogIndex+1+firstUnmatch <= rf.len() {
-						rf.logs = rf.logs[:args.PrevLogIndex+1+firstUnmatch]
+					lastNewIndex = args.PrevLogIndex + firstUnmatch
+
+					// must do this if exist new entry, because may recieve a short entries after a long entries
+					if lastNewIndex+1 <= rf.len() {
+						rf.logs = rf.logs[:lastNewIndex+1]
 					}
 
 					rf.logs = append(rf.logs, args.Entries...)
-
 					lastNewIndex += len(args.Entries)
 				}
 
@@ -942,15 +947,22 @@ func (rf *Raft) heartbeat() {
 					if rf.role == leader {
 						if reply.Success {
 							// If successful: update nextIndex and matchIndex for follower
-							if !args.isheartbeat() {
+							if args.isheartbeat() {
+								rf.Log("Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+							} else {
 								rf.nextIndex[i] = lastLogIndex + 1
 								rf.matchIndex[i] = lastLogIndex
+								rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							}
-							rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+
 							break
 						} else {
 							// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-							rf.Log("AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+							if args.isheartbeat() {
+								rf.Log("Hearbeat fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+							} else {
+								rf.Log("AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+							}
 
 							newNextIndex := index
 

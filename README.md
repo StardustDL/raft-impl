@@ -6,6 +6,8 @@ A demo 1-to-1 implementation in Golang for Raft Consensus algorithm according to
 - Log Replication
 - Persistence
 
+> This implement uses mutex lock only for recieving client requests and enable big step descreasing nextIndex.
+
 ## Testing
 
 ```sh
