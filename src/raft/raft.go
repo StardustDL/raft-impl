@@ -806,13 +806,7 @@ func (rf *Raft) campaign() {
 
 				ok := false
 				ok = rf.sendRequestVote(i, args, &reply)
-				rf.connected[i] = ok
 
-				// If lost from majority of servers: become follower
-				if !rf.isConnected() {
-					rf.Log("%d disconnected at term %d", rf.me, rf.currentTerm)
-					rf.follow()
-				}
 				if ok {
 					rf.checkFollow(reply)
 					if rf.role == candidate {
