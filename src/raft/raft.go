@@ -24,7 +24,6 @@ import (
 	"io"
 	"labrpc"
 	"log"
-	"math"
 	"math/rand"
 	"os"
 	"strings"
@@ -292,11 +291,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 					args.Entries = args.Entries[firstUnmatch:]
 				}
 
-				lastNewIndex := math.MaxInt
+				lastNewIndex := args.PrevLogIndex + firstUnmatch
 
 				if len(args.Entries) > 0 {
-					lastNewIndex = args.PrevLogIndex + firstUnmatch
-
 					// must do this if exist new entry, because may recieve a short entries after a long entries
 					if lastNewIndex+1 <= rf.len() {
 						rf.logs = rf.logs[:lastNewIndex+1]
@@ -308,8 +305,13 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 				// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 				if args.LeaderCommit > rf.commitIndex {
-					rf.commitIndex = minInt(args.LeaderCommit, lastNewIndex)
-					rf.Log("Follower commit index updated: %d", rf.commitIndex)
+					newCommitIndex := minInt(args.LeaderCommit, lastNewIndex)
+					rf.Lock()
+					if newCommitIndex > rf.commitIndex {
+						rf.commitIndex = newCommitIndex
+						rf.Log("Follower commit index updated: %d", rf.commitIndex)
+					}
+					rf.Unlock()
 				}
 			}
 		}
