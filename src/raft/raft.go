@@ -790,41 +790,38 @@ func (rf *Raft) campaign() {
 			continue
 		}
 		go func(rf *Raft, i int) {
-			for rf.role == candidate {
+			reply := RequestVoteReply{}
+
+			index, term := rf.lastLogSignature()
+			args := RequestVoteArgs{
+				Term:         rf.currentTerm,
+				CandidateId:  rf.me,
+				LastLogIndex: index,
+				LastLogTerm:  term,
+			}
+
+			ok := false
+			for !ok && rf.role == candidate && args.Term == rf.currentTerm {
 				if rf.hasKilled() {
 					return
 				}
-				reply := RequestVoteReply{}
-
-				index, term := rf.lastLogSignature()
-				args := RequestVoteArgs{
-					Term:         rf.currentTerm,
-					CandidateId:  rf.me,
-					LastLogIndex: index,
-					LastLogTerm:  term,
-				}
-
-				ok := false
 				ok = rf.sendRequestVote(i, args, &reply)
+			}
 
-				if ok {
-					rf.checkFollow(reply)
-					if rf.role == candidate {
-						if reply.VoteGranted {
-							rf.Log("%d granted vote from %d at term %d", rf.me, i, rf.currentTerm)
+			rf.checkFollow(reply)
+			if rf.role == candidate && args.Term == rf.currentTerm {
+				if reply.VoteGranted {
+					rf.Log("%d granted vote from %d at term %d", rf.me, i, rf.currentTerm)
 
-							rf.voteGranted[i] = true
+					rf.voteGranted[i] = true
 
-							// If votes received from majority of servers: become leader
-							if rf.isWinner() {
-								rf.Log("%d win the election at term %d", rf.me, rf.currentTerm)
-								rf.lead()
-							}
-						} else {
-							rf.Log("%d failed to grant vote from %d at term %d", rf.me, i, rf.currentTerm)
-						}
+					// If votes received from majority of servers: become leader
+					if rf.isWinner() {
+						rf.Log("%d win the election at term %d", rf.me, rf.currentTerm)
+						rf.lead()
 					}
-					break
+				} else {
+					rf.Log("%d failed to grant vote from %d at term %d", rf.me, i, rf.currentTerm)
 				}
 			}
 		}(rf, i)
