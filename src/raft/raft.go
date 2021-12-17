@@ -50,8 +50,8 @@ const (
 	unvoted              = -1
 	notfoundConflictTerm = -1
 	heartbeatTimeout     = time.Duration(50) * time.Millisecond
-	electionTimeoutMin   = 150 * time.Millisecond
-	electionTimeoutMax   = 300 * time.Millisecond
+	electionTimeoutMin   = 500 * time.Millisecond
+	electionTimeoutMax   = 600 * time.Millisecond
 )
 
 const (
@@ -522,6 +522,10 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	// isLeader may unexpected changed after testing if no lock
+	rf.Lock()
+	defer rf.Unlock()
+
 	index := -1
 	term := rf.currentTerm
 	isLeader := rf.role == leader
@@ -536,8 +540,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Value: command,
 		}
 
-		rf.Lock()
-
 		rf.logs = append(rf.logs, entry)
 		lastLogIndex := rf.len()
 		rf.nextIndex[rf.me] = lastLogIndex + 1
@@ -546,8 +548,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		// Updated on stable storage before responding to RPCs
 		// > Leader does not responding to RPCs, just send RPCs.
 		rf.persist()
-
-		rf.Unlock()
 
 		index = lastLogIndex
 
