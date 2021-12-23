@@ -53,6 +53,16 @@ const (
 	heartbeatTimeout     = time.Duration(50) * time.Millisecond
 	electionTimeoutMin   = 400 * time.Millisecond
 	electionTimeoutMax   = 500 * time.Millisecond
+	LOG_CLASS_HEARTBEAT  = "RPC:Heart"
+	LOG_CLASS_APPEND     = "RPC:Entry"
+	LOG_CLASS_VOTE       = "RPC:Voted"
+	LOG_CLASS_CLIENT     = "RPC:Clien"
+	LOG_CLASS_LOCK       = "Lock"
+	LOG_CLASS_TIMEOUT    = "Time"
+	LOG_CLASS_LIFECYCLE  = "Life"
+	LOG_CLASS_COMMIT     = "Cmit"
+	LOG_CLASS_LEADING    = "Lead"
+	LOG_CLASS_ELECTION   = "Elec"
 )
 
 const (
@@ -219,17 +229,18 @@ func (data AppendEntriesReply) term() int {
 //
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	if args.isheartbeat() {
-		rf.Log("Recieve Heartbeat from %d: %+v", args.LeaderId, args)
+		rf.LogClass(LOG_CLASS_HEARTBEAT, "Recieve from %d: %+v", args.LeaderId, args)
 	} else {
-		rf.Log("Recieve AppendEntries from %d: from (%d, %d) with %d entries: %+v", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
+		rf.LogClass(LOG_CLASS_APPEND, "Recieve from %d: from (%d, %d) with %d entries: %+v", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
 	}
 
-	rf.checkFollow(args)
-
-	// If AppendEntries RPC received from new leader: convert to follower
-	if rf.role == candidate && rf.currentTerm == args.Term {
-		rf.follow()
-	}
+	rf.InLock(func() {
+		rf.checkFollow(args)
+		// If AppendEntries RPC received from new leader: convert to follower
+		if rf.role == candidate && rf.currentTerm == args.Term {
+			rf.follow()
+		}
+	})
 
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
@@ -310,7 +321,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 						newCommitIndex := minInt(args.LeaderCommit, lastNewIndex)
 						if newCommitIndex > rf.commitIndex {
 							rf.commitIndex = newCommitIndex
-							rf.Log("Follower commit index updated: %d", rf.commitIndex)
+							rf.LogClass(LOG_CLASS_COMMIT, "Follower commit index updated: %d", rf.commitIndex)
 						}
 					}
 				})
@@ -328,9 +339,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	}
 
 	if args.isheartbeat() {
-		rf.Log("Reply Heartbeat %s to %d: %+v", issuccess, args.LeaderId, args)
+		rf.LogClass(LOG_CLASS_HEARTBEAT, "Reply %s to %d: %+v", issuccess, args.LeaderId, args)
 	} else {
-		rf.Log("Reply AppendEntries %s to %d: from (%d, %d) with %d entries: %+v", issuccess, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
+		rf.LogClass(LOG_CLASS_APPEND, "Reply %s to %d: from (%d, %d) with %d entries: %+v", issuccess, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
 	}
 }
 
@@ -353,16 +364,16 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 //
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	if len(args.Entries) == 0 {
-		rf.Log("Send Heartbeat to %d: %+v", server, args)
+		rf.LogClass(LOG_CLASS_HEARTBEAT, "Send to %d: %+v", server, args)
 	} else {
-		rf.Log("Send AppendEntries from (%d, %d) with %d entries to %d: %+v", args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), server, args)
+		rf.LogClass(LOG_CLASS_APPEND, "Send from (%d, %d) with %d entries to %d: %+v", args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), server, args)
 	}
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	if !ok {
 		if len(args.Entries) == 0 {
-			rf.Log("Failed to send Heartbeat to %d: %+v", server, args)
+			rf.LogClass(LOG_CLASS_HEARTBEAT, "Failed to send to %d: %+v", server, args)
 		} else {
-			rf.Log("Failed to send AppendEntries from (%d, %d) with %d entries to %d: %+v", args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), server, args)
+			rf.LogClass(LOG_CLASS_APPEND, "Failed to send from (%d, %d) with %d entries to %d: %+v", args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), server, args)
 		}
 	}
 	return ok
@@ -399,14 +410,6 @@ func (rf *Raft) Log(format string, v ...interface{}) {
 		return
 	}
 
-	if !LOG_HEARTBEAT && strings.Contains(format, "Heartbeat") {
-		return
-	}
-
-	if !LOG_TIMEOUT && strings.Contains(format, "timeout") {
-		return
-	}
-
 	role := "follow"
 	switch rf.role {
 	case candidate:
@@ -415,6 +418,22 @@ func (rf *Raft) Log(format string, v ...interface{}) {
 		role = "leader"
 	}
 	rf.logger.Printf("%d(%s)[%d,%d>%d>%d]: %s\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, rf.len(), fmt.Sprintf(format, v...))
+}
+
+func (rf *Raft) LogClass(class string, format string, v ...interface{}) {
+	if !LOG_HEARTBEAT && class == LOG_CLASS_HEARTBEAT {
+		return
+	}
+
+	if !LOG_TIMEOUT && class == LOG_CLASS_TIMEOUT {
+		return
+	}
+
+	if !LOG_LOCK && class == LOG_CLASS_LOCK {
+		return
+	}
+
+	rf.Log("(%s) %s", class, fmt.Sprintf(format, v...))
 }
 
 // return length of logs
@@ -454,9 +473,9 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 // RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	rf.Log("Recieve RequestVote from %d: %+v", args.CandidateId, args)
+	rf.LogClass(LOG_CLASS_VOTE, "Recieve from %d: %+v", args.CandidateId, args)
 
-	rf.checkFollow(args)
+	rf.InLock(func() { rf.checkFollow(args) })
 
 	reply.Term = rf.currentTerm
 
@@ -482,7 +501,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	if !reply.VoteGranted {
 		isyes = "NO"
 	}
-	rf.Log("Reply RequestVote %s to %d: %+v", isyes, args.CandidateId, args)
+	rf.LogClass(LOG_CLASS_VOTE, "Reply %s to %d: %+v", isyes, args.CandidateId, args)
 }
 
 //
@@ -503,11 +522,11 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
-	rf.Log("Send RequestVote to %d: %+v", server, args)
+	rf.LogClass(LOG_CLASS_VOTE, "Send to %d: %+v", server, args)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 
 	if !ok {
-		rf.Log("Failed to send RequestVote to %d: %+v", server, args)
+		rf.LogClass(LOG_CLASS_VOTE, "Failed to send to %d: %+v", server, args)
 	}
 	return ok
 }
@@ -535,7 +554,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := rf.role == leader
 
 	if isLeader {
-		rf.Log("Recieve client request: %+v", command)
+		rf.LogClass(LOG_CLASS_CLIENT, "Recieve request: %+v", command)
 
 		// If command received from client: append entry to local log, respond after entry applied to state machine
 
@@ -558,7 +577,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		// start log entry sync
 		rf.heartbeat()
 
-		rf.Log("Reply client request %+v: %d", command, index)
+		rf.LogClass(LOG_CLASS_CLIENT, "Reply request %+v: %d", command, index)
 	}
 
 	return index, term, isLeader
@@ -571,7 +590,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
-	rf.Log("Killed")
+	rf.LogClass(LOG_CLASS_LIFECYCLE, "Killed")
 	close(rf.killCh)
 }
 
@@ -660,10 +679,10 @@ func (rf *Raft) updateCommitIndex() {
 				matchedCount++
 			}
 		}
-		// rf.Log("Index %d matched %d of %d", newIndex, matchedCount, len(rf.peers))
+		// rf.LogClass(LOG_CLASS_COMMIT, "Index %d matched %d of %d", newIndex, matchedCount, len(rf.peers))
 		if matchedCount*2 > len(rf.peers) {
 			rf.commitIndex = newIndex
-			rf.Log("Leader commit index updated: %d", rf.commitIndex)
+			rf.LogClass(LOG_CLASS_COMMIT, "Leader commit index updated: %d", rf.commitIndex)
 		}
 	}
 }
@@ -682,39 +701,35 @@ func (rf *Raft) apply() {
 			UseSnapshot: false,
 			Snapshot:    make([]byte, 0),
 		}
-		rf.Log("Applying %d: %+v", cur, msg)
+		rf.LogClass(LOG_CLASS_COMMIT, "Applying %d: %+v", cur, msg)
 
 		rf.applyCh <- msg
 
 		rf.lastApplied = cur
 
-		rf.Log("Applied %d: %+v", cur, msg)
+		rf.LogClass(LOG_CLASS_COMMIT, "Applied %d: %+v", cur, msg)
 	}
 }
 
 func (rf *Raft) resetElectionTimeout() {
 	timeout := getRandomizedElectionTimeout()
-	rf.Log("%d reset election timeout: %d", rf.me, timeout.Milliseconds())
+	rf.LogClass(LOG_CLASS_TIMEOUT, "%d reset election timeout: %d", rf.me, timeout.Milliseconds())
 	rf.electionTimer.Reset(timeout)
 }
 
 func (rf *Raft) resetHeartbeatTimeout() {
-	rf.Log("%d reset heartbeat timeout: %d", rf.me, heartbeatTimeout.Milliseconds())
+	rf.LogClass(LOG_CLASS_TIMEOUT, "%d reset heartbeat timeout: %d", rf.me, heartbeatTimeout.Milliseconds())
 	rf.heartbeatTimer.Reset(heartbeatTimeout)
 }
 
 func (rf *Raft) Lock() {
 	rf.mu.Lock()
-	if LOG_LOCK {
-		rf.Log("Lock")
-	}
+	rf.LogClass(LOG_CLASS_LOCK, "Lock")
 }
 
 func (rf *Raft) Unlock() {
 	rf.mu.Unlock()
-	if LOG_LOCK {
-		rf.Log("Unlock")
-	}
+	rf.LogClass(LOG_CLASS_LOCK, "Unlock")
 }
 
 func (rf *Raft) InLock(f func()) {
@@ -732,7 +747,7 @@ func (rf *Raft) OutLock(f func()) {
 }
 
 func (rf *Raft) longrun() {
-	rf.Log("Long running...")
+	rf.LogClass(LOG_CLASS_LIFECYCLE, "Long running...")
 	go func() {
 		for {
 			// If election timeout elapses: start new election
@@ -793,7 +808,7 @@ func (rf *Raft) campaign() {
 		return
 	}
 
-	rf.Log("%d campaign at term %d", rf.me, rf.currentTerm+1)
+	rf.LogClass(LOG_CLASS_LIFECYCLE, "%d campaign at term %d", rf.me, rf.currentTerm+1)
 	for i := range rf.voteGranted {
 		rf.voteGranted[i] = false
 	}
@@ -833,20 +848,21 @@ func (rf *Raft) campaign() {
 				ok = rf.sendRequestVote(i, args, &reply)
 			}
 
-			rf.checkFollow(reply)
+			rf.InLock(func() { rf.checkFollow(reply) })
+
 			if rf.role == candidate && rf.currentTerm == currentTerm {
 				if reply.VoteGranted {
-					rf.Log("%d granted vote from %d at term %d", rf.me, i, currentTerm)
+					rf.LogClass(LOG_CLASS_ELECTION, "%d granted vote from %d at term %d", rf.me, i, currentTerm)
 
 					rf.voteGranted[i] = true
 
 					// If votes received from majority of servers: become leader
 					if rf.isWinner() {
-						rf.Log("%d win the election at term %d", rf.me, currentTerm)
+						rf.LogClass(LOG_CLASS_ELECTION, "%d win the election at term %d", rf.me, currentTerm)
 						rf.lead()
 					}
 				} else {
-					rf.Log("%d failed to grant vote from %d at term %d", rf.me, i, currentTerm)
+					rf.LogClass(LOG_CLASS_ELECTION, "%d failed to grant vote from %d at term %d", rf.me, i, currentTerm)
 				}
 			}
 		}(i)
@@ -865,7 +881,7 @@ func (rf *Raft) follow() {
 	if rf.role == follower {
 		return
 	}
-	rf.Log("%d follow at term %d", rf.me, rf.currentTerm)
+	rf.LogClass(LOG_CLASS_LIFECYCLE, "%d follow at term %d", rf.me, rf.currentTerm)
 	rf.role = follower
 
 	rf.votedFor = unvoted
@@ -875,7 +891,7 @@ func (rf *Raft) lead() {
 	if rf.role == leader {
 		return
 	}
-	rf.Log("%d lead at term %d", rf.me, rf.currentTerm)
+	rf.LogClass(LOG_CLASS_LIFECYCLE, "%d lead at term %d", rf.me, rf.currentTerm)
 	rf.role = leader
 	lastIndex := rf.len()
 	for i := range rf.peers {
@@ -905,7 +921,7 @@ func (rf *Raft) heartbeat() {
 		return
 	}
 
-	rf.Log("%d heartbeats at term %d", rf.me, rf.currentTerm)
+	rf.LogClass(LOG_CLASS_LIFECYCLE, "%d heartbeats at term %d", rf.me, rf.currentTerm)
 
 	// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
 	//   If successful: update nextIndex and matchIndex for follower
@@ -942,8 +958,8 @@ func (rf *Raft) heartbeat() {
 
 				// If lost from majority of servers: become follower
 				if !rf.isConnected() {
-					rf.Log("%d disconnected at term %d", rf.me, currentTerm)
-					rf.follow()
+					rf.LogClass(LOG_CLASS_LIFECYCLE, "%d disconnected at term %d", rf.me, currentTerm)
+					rf.InLock(func() { rf.follow() })
 				}
 
 				// Sended
@@ -956,13 +972,13 @@ func (rf *Raft) heartbeat() {
 				//   normal -> retry
 
 				if ok {
-					rf.checkFollow(reply)
+					rf.InLock(func() { rf.checkFollow(reply) })
 
 					if rf.role == leader && rf.currentTerm == currentTerm {
 						if reply.Success {
 							// If successful: update nextIndex and matchIndex for follower
 							if args.isheartbeat() {
-								rf.Log("Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+								rf.LogClass(LOG_CLASS_LEADING, "Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							} else {
 								rf.InLock(func() {
 									if rf.role != leader || rf.currentTerm != currentTerm || rf.matchIndex[i] >= lastLogIndex {
@@ -971,16 +987,16 @@ func (rf *Raft) heartbeat() {
 									rf.nextIndex[i] = lastLogIndex + 1
 									rf.matchIndex[i] = lastLogIndex
 								})
-								rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+								rf.LogClass(LOG_CLASS_LEADING, "AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							}
 
 							break
 						} else {
 							// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
 							if args.isheartbeat() {
-								rf.Log("Hearbeat fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+								rf.LogClass(LOG_CLASS_LEADING, "Hearbeat fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
 							} else {
-								rf.Log("AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+								rf.LogClass(LOG_CLASS_LEADING, "AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
 							}
 
 							newNextIndex := index
@@ -1009,10 +1025,10 @@ func (rf *Raft) heartbeat() {
 										return
 									}
 									rf.nextIndex[i] = newNextIndex
-									rf.Log("nextIndex[%d] -> %d", i, rf.nextIndex[i])
+									rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d", i, rf.nextIndex[i])
 								})
 							} else { // another coroutine has changed nextIndex[i] to smaller
-								rf.Log("nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
+								rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
 								break
 							}
 						}
