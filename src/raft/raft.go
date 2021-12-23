@@ -277,44 +277,43 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			} else { // args.PrevLogIndex == 0 or rf.logs[args.PrevLogIndex].Term == args.PrevLogTerm
 				reply.Success = true
 
-				rf.Lock()
-				defer rf.Unlock()
+				rf.InLock(func() {
+					// Append any new entries not already in the log
 
-				// Append any new entries not already in the log
+					// If an existing entry conflicts with a new one (same index but different terms)
+					// delete the existing entry and all that follow it
 
-				// If an existing entry conflicts with a new one (same index but different terms)
-				// delete the existing entry and all that follow it
+					firstUnmatch := 0
 
-				firstUnmatch := 0
-
-				for firstUnmatch < len(args.Entries) && args.PrevLogIndex+1+firstUnmatch <= rf.len() && rf.logs[args.PrevLogIndex+1+firstUnmatch].Term == args.Entries[firstUnmatch].Term {
-					firstUnmatch++
-				}
-
-				if firstUnmatch <= len(args.Entries) {
-					args.Entries = args.Entries[firstUnmatch:]
-				}
-
-				lastNewIndex := args.PrevLogIndex + firstUnmatch
-
-				if len(args.Entries) > 0 {
-					// must do this if exist new entry, because may recieve a short entries after a long entries
-					if lastNewIndex+1 <= rf.len() {
-						rf.logs = rf.logs[:lastNewIndex+1]
+					for firstUnmatch < len(args.Entries) && args.PrevLogIndex+1+firstUnmatch <= rf.len() && rf.logs[args.PrevLogIndex+1+firstUnmatch].Term == args.Entries[firstUnmatch].Term {
+						firstUnmatch++
 					}
 
-					rf.logs = append(rf.logs, args.Entries...)
-					lastNewIndex += len(args.Entries)
-				}
-
-				// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-				if args.LeaderCommit > rf.commitIndex {
-					newCommitIndex := minInt(args.LeaderCommit, lastNewIndex)
-					if newCommitIndex > rf.commitIndex {
-						rf.commitIndex = newCommitIndex
-						rf.Log("Follower commit index updated: %d", rf.commitIndex)
+					if firstUnmatch <= len(args.Entries) {
+						args.Entries = args.Entries[firstUnmatch:]
 					}
-				}
+
+					lastNewIndex := args.PrevLogIndex + firstUnmatch
+
+					if len(args.Entries) > 0 {
+						// must do this if exist new entry, because may recieve a short entries after a long entries
+						if lastNewIndex+1 <= rf.len() {
+							rf.logs = rf.logs[:lastNewIndex+1]
+						}
+
+						rf.logs = append(rf.logs, args.Entries...)
+						lastNewIndex += len(args.Entries)
+					}
+
+					// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+					if args.LeaderCommit > rf.commitIndex {
+						newCommitIndex := minInt(args.LeaderCommit, lastNewIndex)
+						if newCommitIndex > rf.commitIndex {
+							rf.commitIndex = newCommitIndex
+							rf.Log("Follower commit index updated: %d", rf.commitIndex)
+						}
+					}
+				})
 			}
 		}
 	}
@@ -463,14 +462,17 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	// Reply false if term < currentTerm
 	// If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote
-	if args.Term >= rf.currentTerm && (rf.votedFor == unvoted || rf.votedFor == args.CandidateId) && rf.isUpToDate(args.LastLogIndex, args.LastLogTerm) {
-		rf.votedFor = args.CandidateId
 
-		// granting vote to candidate
-		rf.resetElectionTimeout()
+	rf.InLock(func() {
+		if args.Term >= rf.currentTerm && (rf.votedFor == unvoted || rf.votedFor == args.CandidateId) && rf.isUpToDate(args.LastLogIndex, args.LastLogTerm) {
+			rf.votedFor = args.CandidateId
 
-		reply.VoteGranted = true
-	}
+			// granting vote to candidate
+			rf.resetElectionTimeout()
+
+			reply.VoteGranted = true
+		}
+	})
 
 	// Updated on stable storage before responding to RPCs
 	rf.persist()
@@ -715,12 +717,18 @@ func (rf *Raft) Unlock() {
 	}
 }
 
-func (rf *Raft) WithLock(f func()) {
+func (rf *Raft) InLock(f func()) {
 	rf.Lock()
 	defer rf.Unlock()
 
 	f()
+}
 
+func (rf *Raft) OutLock(f func()) {
+	rf.Unlock()
+	defer rf.Lock()
+
+	f()
 }
 
 func (rf *Raft) longrun() {
@@ -734,7 +742,7 @@ func (rf *Raft) longrun() {
 					if rf.hasKilled() {
 						return
 					}
-					rf.WithLock(func() { rf.campaign() })
+					rf.InLock(func() { rf.campaign() })
 				}()
 			case <-rf.killCh:
 				return
@@ -750,7 +758,7 @@ func (rf *Raft) longrun() {
 					if rf.hasKilled() {
 						return
 					}
-					rf.heartbeat()
+					rf.InLock(func() { rf.heartbeat() })
 				}()
 			case <-rf.killCh:
 				return
@@ -763,7 +771,7 @@ func (rf *Raft) longrun() {
 			if rf.hasKilled() {
 				return
 			}
-			rf.WithLock(func() { rf.apply() })
+			rf.InLock(func() { rf.apply() })
 		}
 	}()
 }
@@ -800,6 +808,8 @@ func (rf *Raft) campaign() {
 	// Reset election timer
 	rf.resetElectionTimeout()
 
+	currentTerm := rf.currentTerm
+
 	// Send RequestVote RPCs to all other servers
 	for i := range rf.peers {
 		if i == rf.me {
@@ -810,14 +820,14 @@ func (rf *Raft) campaign() {
 
 			index, term := rf.lastLogSignature()
 			args := RequestVoteArgs{
-				Term:         rf.currentTerm,
+				Term:         currentTerm,
 				CandidateId:  rf.me,
 				LastLogIndex: index,
 				LastLogTerm:  term,
 			}
 
 			ok := false
-			for !ok && rf.role == candidate && args.Term == rf.currentTerm {
+			for !ok && rf.role == candidate && args.Term == currentTerm {
 				if rf.hasKilled() {
 					return
 				}
@@ -825,19 +835,19 @@ func (rf *Raft) campaign() {
 			}
 
 			rf.checkFollow(reply)
-			if rf.role == candidate && args.Term == rf.currentTerm {
+			if rf.role == candidate && args.Term == currentTerm {
 				if reply.VoteGranted {
-					rf.Log("%d granted vote from %d at term %d", rf.me, i, rf.currentTerm)
+					rf.Log("%d granted vote from %d at term %d", rf.me, i, currentTerm)
 
 					rf.voteGranted[i] = true
 
 					// If votes received from majority of servers: become leader
 					if rf.isWinner() {
-						rf.Log("%d win the election at term %d", rf.me, rf.currentTerm)
+						rf.Log("%d win the election at term %d", rf.me, currentTerm)
 						rf.lead()
 					}
 				} else {
-					rf.Log("%d failed to grant vote from %d at term %d", rf.me, i, rf.currentTerm)
+					rf.Log("%d failed to grant vote from %d at term %d", rf.me, i, currentTerm)
 				}
 			}
 		}(i)
@@ -902,6 +912,10 @@ func (rf *Raft) heartbeat() {
 	//   If successful: update nextIndex and matchIndex for follower
 	//   If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
 
+	len := rf.len()
+	currentTerm := rf.currentTerm
+	commitIndex := rf.commitIndex
+
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
@@ -914,14 +928,14 @@ func (rf *Raft) heartbeat() {
 				reply := AppendEntriesReply{}
 
 				index, term := rf.prevLogSignature(i)
-				lastLogIndex := rf.len()
+				lastLogIndex := len
 				args := AppendEntriesArgs{
-					Term:         rf.currentTerm,
+					Term:         currentTerm,
 					LeaderId:     rf.me,
 					PrevLogIndex: index,
 					PrevLogTerm:  term,
 					Entries:      rf.logs[index+1:],
-					LeaderCommit: rf.commitIndex,
+					LeaderCommit: commitIndex,
 				}
 
 				ok := false
@@ -930,7 +944,7 @@ func (rf *Raft) heartbeat() {
 
 				// If lost from majority of servers: become follower
 				if !rf.isConnected() {
-					rf.Log("%d disconnected at term %d", rf.me, rf.currentTerm)
+					rf.Log("%d disconnected at term %d", rf.me, currentTerm)
 					rf.follow()
 				}
 
@@ -952,8 +966,13 @@ func (rf *Raft) heartbeat() {
 							if args.isheartbeat() {
 								rf.Log("Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							} else {
-								rf.nextIndex[i] = lastLogIndex + 1
-								rf.matchIndex[i] = lastLogIndex
+								rf.InLock(func() {
+									if rf.role != leader || rf.matchIndex[i] >= lastLogIndex {
+										return
+									}
+									rf.nextIndex[i] = lastLogIndex + 1
+									rf.matchIndex[i] = lastLogIndex
+								})
 								rf.Log("AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							}
 
@@ -980,15 +999,20 @@ func (rf *Raft) heartbeat() {
 
 								newNextIndex = reply.ConflictIndex
 								if reply.ConflictTerm != notfoundConflictTerm {
-									for newNextIndex <= rf.len() && rf.logs[newNextIndex].Term == reply.ConflictTerm {
+									for newNextIndex <= len && rf.logs[newNextIndex].Term == reply.ConflictTerm {
 										newNextIndex++
 									}
 								}
 							}
 
 							if newNextIndex < rf.nextIndex[i] {
-								rf.nextIndex[i] = newNextIndex
-								rf.Log("nextIndex[%d] -> %d", i, rf.nextIndex[i])
+								rf.InLock(func() {
+									if rf.role != leader || newNextIndex >= rf.nextIndex[i] {
+										return
+									}
+									rf.nextIndex[i] = newNextIndex
+									rf.Log("nextIndex[%d] -> %d", i, rf.nextIndex[i])
+								})
 							} else { // another coroutine has changed nextIndex[i] to smaller
 								rf.Log("nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
 								break

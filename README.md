@@ -97,29 +97,29 @@ Test: churn ...
 Test: unreliable churn ...
   ... Passed
 PASS
-ok      raft    237.417s
+ok      raft    243.024s
 ```
 
 ### Batch Tests
 
-> The result from the command `python ./batch_test.py all -c 200 -w 1`.
+> The result from the command `python ./batch_test.py all -c 100 -w 1`.
 
 ```
-Figure8Unreliable: 66.0% (66/100)
-Backup: 91.0% (91/100)
-Persist2: 97.0% (97/100)
-UnreliableAgree: 99.0% (99/100)
+Figure8Unreliable: 84.0% (84/100)
+Rejoin: 98.0% (98/100)
+FailNoAgree: 99.0% (99/100)
+Backup: 100.0% (100/100)
 BasicAgree: 100.0% (100/100)
 ConcurrentStarts: 100.0% (100/100)
 Count: 100.0% (100/100)
 FailAgree: 100.0% (100/100)
-FailNoAgree: 100.0% (100/100)
 Figure8: 100.0% (100/100)
 InitialElection: 100.0% (100/100)
 Persist1: 100.0% (100/100)
+Persist2: 100.0% (100/100)
 Persist3: 100.0% (100/100)
 ReElection: 100.0% (100/100)
-Rejoin: 100.0% (100/100)
 ReliableChurn: 100.0% (100/100)
+UnreliableAgree: 100.0% (100/100)
 UnreliableChurn: 100.0% (100/100)
 ```
