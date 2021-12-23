@@ -20,6 +20,7 @@ The project detect a runtime environment variable **`DEBUG`**.
 - Enable debug mode and logging, if it exists and it is not empty (any non-empty values is OK).
 - Enable heartbeat logging, if it contains `H`.
 - Enable timer logging, if it contains `T`.
+- Enable lock logging, if it contains `L`.
 - Disable persisting, if it contains `p`.
 - Disable the optimization for big step to decrease nextIndex, if it contains `b`
 
@@ -46,7 +47,7 @@ pwsh -c ./tests/all.ps1
 ```sh
 python ./batch_test.py "test collection name"
   [-c <replication count=10>]
-  [-f <DEBUG Flags="HT">]
+  [-f <DEBUG Flags="HTL">]
   [-w <parallelism=the number of CPU cores>]
 ```
 
@@ -104,21 +105,21 @@ ok      raft    186.908s
 > The result from the command `python ./batch_test.py all -c 200 -w 1`.
 
 ```
-Figure8Unreliable: 72.0% (144/200)
-Figure8: 73.5% (147/200)
-ReliableChurn: 99.5% (199/200)
-Backup: 100.0% (200/200)
-BasicAgree: 100.0% (200/200)
-ConcurrentStarts: 100.0% (200/200)
-Count: 100.0% (200/200)
-FailAgree: 100.0% (200/200)
-FailNoAgree: 100.0% (200/200)
-InitialElection: 100.0% (200/200)
-Persist1: 100.0% (200/200)
-Persist2: 100.0% (200/200)
-Persist3: 100.0% (200/200)
-ReElection: 100.0% (200/200)
-Rejoin: 100.0% (200/200)
-UnreliableAgree: 100.0% (200/200)
-UnreliableChurn: 100.0% (200/200)
+Figure8Unreliable: 66.0% (66/100)
+Backup: 91.0% (91/100)
+Persist2: 97.0% (97/100)
+UnreliableAgree: 99.0% (99/100)
+BasicAgree: 100.0% (100/100)
+ConcurrentStarts: 100.0% (100/100)
+Count: 100.0% (100/100)
+FailAgree: 100.0% (100/100)
+FailNoAgree: 100.0% (100/100)
+Figure8: 100.0% (100/100)
+InitialElection: 100.0% (100/100)
+Persist1: 100.0% (100/100)
+Persist3: 100.0% (100/100)
+ReElection: 100.0% (100/100)
+Rejoin: 100.0% (100/100)
+ReliableChurn: 100.0% (100/100)
+UnreliableChurn: 100.0% (100/100)
 ```

@@ -150,7 +150,7 @@ def main():
 
     parser.add_argument("name", choices=list(TESTS))
     parser.add_argument("-c", "--count", default=10, type=int)
-    parser.add_argument("-f", "--flag", default="HT")
+    parser.add_argument("-f", "--flag", default="HTL")
     parser.add_argument("-w", "--worker", default=None,
                         type=lambda x: int(x) if x else None)
 

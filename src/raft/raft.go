@@ -38,6 +38,7 @@ var (
 	DEBUG                     = false
 	LOG_HEARTBEAT             = false
 	LOG_TIMEOUT               = false
+	LOG_LOCK                  = false
 	DISABLE_PERSIST           = false
 	DISABLE_NEXTINDEX_BIGSTEP = false // disable the optimization for big step to decrease nextIndex
 )
@@ -50,8 +51,8 @@ const (
 	unvoted              = -1
 	notfoundConflictTerm = -1
 	heartbeatTimeout     = time.Duration(50) * time.Millisecond
-	electionTimeoutMin   = 500 * time.Millisecond
-	electionTimeoutMax   = 600 * time.Millisecond
+	electionTimeoutMin   = 400 * time.Millisecond
+	electionTimeoutMax   = 500 * time.Millisecond
 )
 
 const (
@@ -217,6 +218,9 @@ func (data AppendEntriesReply) term() int {
 // AppendEntries RPC handler.
 //
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.Lock()
+	defer rf.Unlock()
+
 	if args.isheartbeat() {
 		rf.Log("Recieve Heartbeat from %d: %+v", args.LeaderId, args)
 	} else {
@@ -306,12 +310,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 				if args.LeaderCommit > rf.commitIndex {
 					newCommitIndex := minInt(args.LeaderCommit, lastNewIndex)
-					rf.Lock()
 					if newCommitIndex > rf.commitIndex {
 						rf.commitIndex = newCommitIndex
 						rf.Log("Follower commit index updated: %d", rf.commitIndex)
 					}
-					rf.Unlock()
 				}
 			}
 		}
@@ -453,6 +455,9 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 // RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
+	rf.Lock()
+	defer rf.Unlock()
+
 	rf.Log("Recieve RequestVote from %d: %+v", args.CandidateId, args)
 
 	rf.checkFollow(args)
@@ -591,6 +596,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	DISABLE_PERSIST = strings.Contains(debugEnv, "p")
 	DISABLE_NEXTINDEX_BIGSTEP = strings.Contains(debugEnv, "b")
 	LOG_TIMEOUT = strings.Contains(debugEnv, "T")
+	LOG_LOCK = strings.Contains(debugEnv, "L")
 
 	rf := &Raft{}
 	rf.peers = peers
@@ -665,6 +671,9 @@ func (rf *Raft) updateCommitIndex() {
 
 // If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
 func (rf *Raft) apply() {
+	// rf.Lock()
+	// defer rf.Unlock()
+
 	if rf.role == leader {
 		rf.updateCommitIndex()
 	}
@@ -700,12 +709,16 @@ func (rf *Raft) resetHeartbeatTimeout() {
 
 func (rf *Raft) Lock() {
 	rf.mu.Lock()
-	rf.Log("Lock")
+	if LOG_LOCK {
+		rf.Log("Lock")
+	}
 }
 
 func (rf *Raft) Unlock() {
 	rf.mu.Unlock()
-	rf.Log("Unlock")
+	if LOG_LOCK {
+		rf.Log("Unlock")
+	}
 }
 
 func (rf *Raft) WithLock(f func()) {
