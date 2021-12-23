@@ -218,9 +218,6 @@ func (data AppendEntriesReply) term() int {
 // AppendEntries RPC handler.
 //
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
-	rf.Lock()
-	defer rf.Unlock()
-
 	if args.isheartbeat() {
 		rf.Log("Recieve Heartbeat from %d: %+v", args.LeaderId, args)
 	} else {
@@ -279,6 +276,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				rf.logs = rf.logs[:args.PrevLogIndex]
 			} else { // args.PrevLogIndex == 0 or rf.logs[args.PrevLogIndex].Term == args.PrevLogTerm
 				reply.Success = true
+
+				rf.Lock()
+				defer rf.Unlock()
 
 				// Append any new entries not already in the log
 
@@ -455,9 +455,6 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 // RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	rf.Lock()
-	defer rf.Unlock()
-
 	rf.Log("Recieve RequestVote from %d: %+v", args.CandidateId, args)
 
 	rf.checkFollow(args)
@@ -671,9 +668,6 @@ func (rf *Raft) updateCommitIndex() {
 
 // If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
 func (rf *Raft) apply() {
-	// rf.Lock()
-	// defer rf.Unlock()
-
 	if rf.role == leader {
 		rf.updateCommitIndex()
 	}
@@ -733,13 +727,14 @@ func (rf *Raft) longrun() {
 	rf.Log("Long running...")
 	go func(rf *Raft) {
 		for {
+			// If election timeout elapses: start new election
 			select {
 			case <-rf.electionTimer.C:
 				go func() {
 					if rf.hasKilled() {
 						return
 					}
-					rf.election()
+					rf.WithLock(func() { rf.campaign() })
 				}()
 			case <-rf.killCh:
 				return
@@ -768,7 +763,7 @@ func (rf *Raft) longrun() {
 			if rf.hasKilled() {
 				return
 			}
-			rf.apply()
+			rf.WithLock(func() { rf.apply() })
 		}
 	}(rf)
 }
@@ -784,6 +779,7 @@ func (rf *Raft) isWinner() bool {
 	return votedCount*2 > len(rf.peers)
 }
 
+// If election timeout elapses: start new election
 func (rf *Raft) campaign() {
 	if rf.role == leader {
 		return
@@ -881,15 +877,6 @@ func (rf *Raft) lead() {
 
 	// Upon election: send heartbeat to each server to prevent election timeouts
 	rf.heartbeat()
-}
-
-// If election timeout elapses: start new election
-func (rf *Raft) election() {
-	if rf.role == leader {
-		return
-	}
-
-	rf.campaign()
 }
 
 // If lost from majority of servers: become follower
