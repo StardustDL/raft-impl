@@ -725,7 +725,7 @@ func (rf *Raft) WithLock(f func()) {
 
 func (rf *Raft) longrun() {
 	rf.Log("Long running...")
-	go func(rf *Raft) {
+	go func() {
 		for {
 			// If election timeout elapses: start new election
 			select {
@@ -740,9 +740,9 @@ func (rf *Raft) longrun() {
 				return
 			}
 		}
-	}(rf)
+	}()
 
-	go func(rf *Raft) {
+	go func() {
 		for {
 			select {
 			case <-rf.heartbeatTimer.C:
@@ -756,16 +756,16 @@ func (rf *Raft) longrun() {
 				return
 			}
 		}
-	}(rf)
+	}()
 
-	go func(rf *Raft) {
+	go func() {
 		for {
 			if rf.hasKilled() {
 				return
 			}
 			rf.WithLock(func() { rf.apply() })
 		}
-	}(rf)
+	}()
 }
 
 // If votes received from majority of servers: become leader
@@ -805,7 +805,7 @@ func (rf *Raft) campaign() {
 		if i == rf.me {
 			continue
 		}
-		go func(rf *Raft, i int) {
+		go func(i int) {
 			reply := RequestVoteReply{}
 
 			index, term := rf.lastLogSignature()
@@ -840,7 +840,7 @@ func (rf *Raft) campaign() {
 					rf.Log("%d failed to grant vote from %d at term %d", rf.me, i, rf.currentTerm)
 				}
 			}
-		}(rf, i)
+		}(i)
 	}
 }
 
@@ -906,7 +906,7 @@ func (rf *Raft) heartbeat() {
 		if i == rf.me {
 			continue
 		}
-		go func(rf *Raft, i int) {
+		go func(i int) {
 			for rf.role == leader {
 				if rf.hasKilled() {
 					return
@@ -1001,7 +1001,7 @@ func (rf *Raft) heartbeat() {
 					}
 				}
 			}
-		}(rf, i)
+		}(i)
 	}
 
 	if rf.role == leader {
