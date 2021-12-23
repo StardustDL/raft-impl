@@ -97,7 +97,7 @@ Test: churn ...
 Test: unreliable churn ...
   ... Passed
 PASS
-ok      raft    240.827s
+ok      raft    257.161s
 ```
 
 ### Batch Tests

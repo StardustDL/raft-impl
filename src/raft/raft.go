@@ -113,6 +113,7 @@ type Raft struct {
 	logger    *log.Logger   // logger
 	applyCh   chan ApplyMsg // a channel on which the tester or service expects Raft to send ApplyMsg messages
 	killCh    chan bool     // a channel for kill
+	locked    bool          // is the instance locked
 
 	// Persistent state on all servers (Updated on stable storage before responding to RPCs)
 
@@ -417,7 +418,11 @@ func (rf *Raft) Log(format string, v ...interface{}) {
 	case leader:
 		role = "leader"
 	}
-	rf.logger.Printf("%d(%s)[%d,%d>%d>%d]: %s\n", rf.me, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, rf.len(), fmt.Sprintf(format, v...))
+	locked := "-"
+	if rf.locked {
+		locked = "+"
+	}
+	rf.logger.Printf("%d%s(%s)[%d,%d>%d>%d]: %s\n", rf.me, locked, role, rf.currentTerm, rf.lastApplied, rf.commitIndex, rf.len(), fmt.Sprintf(format, v...))
 }
 
 func (rf *Raft) LogClass(class string, format string, v ...interface{}) {
@@ -622,6 +627,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.applyCh = applyCh
 	rf.killCh = make(chan bool)
+	rf.locked = false
 
 	if DEBUG {
 		rf.logger = log.New(os.Stderr, "", log.Ltime|log.Lmicroseconds)
@@ -724,10 +730,12 @@ func (rf *Raft) resetHeartbeatTimeout() {
 
 func (rf *Raft) Lock() {
 	rf.mu.Lock()
+	rf.locked = true
 	rf.LogClass(LOG_CLASS_LOCK, "Lock")
 }
 
 func (rf *Raft) Unlock() {
+	rf.locked = false
 	rf.mu.Unlock()
 	rf.LogClass(LOG_CLASS_LOCK, "Unlock")
 }
