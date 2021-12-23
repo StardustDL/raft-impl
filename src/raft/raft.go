@@ -369,7 +369,7 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 }
 
 //
-// example RequestVote RPC arguments structure.
+// RequestVote RPC arguments structure.
 //
 type RequestVoteArgs struct {
 	Term         int // candidate’s term
@@ -383,7 +383,7 @@ func (data RequestVoteArgs) term() int {
 }
 
 //
-// example RequestVote RPC reply structure.
+// RequestVote RPC reply structure.
 //
 type RequestVoteReply struct {
 	Term        int  // currentTerm, for candidate to update itself
@@ -809,6 +809,13 @@ func (rf *Raft) campaign() {
 	rf.resetElectionTimeout()
 
 	currentTerm := rf.currentTerm
+	index, term := rf.lastLogSignature()
+	args := RequestVoteArgs{
+		Term:         currentTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: index,
+		LastLogTerm:  term,
+	}
 
 	// Send RequestVote RPCs to all other servers
 	for i := range rf.peers {
@@ -818,16 +825,8 @@ func (rf *Raft) campaign() {
 		go func(i int) {
 			reply := RequestVoteReply{}
 
-			index, term := rf.lastLogSignature()
-			args := RequestVoteArgs{
-				Term:         currentTerm,
-				CandidateId:  rf.me,
-				LastLogIndex: index,
-				LastLogTerm:  term,
-			}
-
 			ok := false
-			for !ok && rf.role == candidate && args.Term == currentTerm {
+			for !ok && rf.role == candidate && rf.currentTerm == currentTerm {
 				if rf.hasKilled() {
 					return
 				}
@@ -835,7 +834,7 @@ func (rf *Raft) campaign() {
 			}
 
 			rf.checkFollow(reply)
-			if rf.role == candidate && args.Term == currentTerm {
+			if rf.role == candidate && rf.currentTerm == currentTerm {
 				if reply.VoteGranted {
 					rf.Log("%d granted vote from %d at term %d", rf.me, i, currentTerm)
 
@@ -912,30 +911,29 @@ func (rf *Raft) heartbeat() {
 	//   If successful: update nextIndex and matchIndex for follower
 	//   If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
 
-	len := rf.len()
+	lastLogIndex := rf.len()
 	currentTerm := rf.currentTerm
-	commitIndex := rf.commitIndex
 
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
 		}
 		go func(i int) {
-			for rf.role == leader {
+			reply := AppendEntriesReply{}
+
+			for rf.role == leader && rf.currentTerm == currentTerm {
 				if rf.hasKilled() {
 					return
 				}
-				reply := AppendEntriesReply{}
 
 				index, term := rf.prevLogSignature(i)
-				lastLogIndex := len
 				args := AppendEntriesArgs{
 					Term:         currentTerm,
 					LeaderId:     rf.me,
 					PrevLogIndex: index,
 					PrevLogTerm:  term,
 					Entries:      rf.logs[index+1:],
-					LeaderCommit: commitIndex,
+					LeaderCommit: rf.commitIndex,
 				}
 
 				ok := false
@@ -960,14 +958,14 @@ func (rf *Raft) heartbeat() {
 				if ok {
 					rf.checkFollow(reply)
 
-					if rf.role == leader {
+					if rf.role == leader && rf.currentTerm == currentTerm {
 						if reply.Success {
 							// If successful: update nextIndex and matchIndex for follower
 							if args.isheartbeat() {
 								rf.Log("Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							} else {
 								rf.InLock(func() {
-									if rf.role != leader || rf.matchIndex[i] >= lastLogIndex {
+									if rf.role != leader || rf.currentTerm != currentTerm || rf.matchIndex[i] >= lastLogIndex {
 										return
 									}
 									rf.nextIndex[i] = lastLogIndex + 1
@@ -999,7 +997,7 @@ func (rf *Raft) heartbeat() {
 
 								newNextIndex = reply.ConflictIndex
 								if reply.ConflictTerm != notfoundConflictTerm {
-									for newNextIndex <= len && rf.logs[newNextIndex].Term == reply.ConflictTerm {
+									for newNextIndex <= lastLogIndex && rf.logs[newNextIndex].Term == reply.ConflictTerm {
 										newNextIndex++
 									}
 								}
@@ -1007,7 +1005,7 @@ func (rf *Raft) heartbeat() {
 
 							if newNextIndex < rf.nextIndex[i] {
 								rf.InLock(func() {
-									if rf.role != leader || newNextIndex >= rf.nextIndex[i] {
+									if rf.role != leader || rf.currentTerm != currentTerm || newNextIndex >= rf.nextIndex[i] {
 										return
 									}
 									rf.nextIndex[i] = newNextIndex
