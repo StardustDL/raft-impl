@@ -50,7 +50,7 @@ var (
 const (
 	unvoted              = -1
 	notfoundConflictTerm = -1
-	heartbeatTimeout     = time.Duration(50) * time.Millisecond
+	heartbeatTimeout     = time.Duration(40) * time.Millisecond
 	electionTimeoutMin   = 400 * time.Millisecond
 	electionTimeoutMax   = 500 * time.Millisecond
 	LOG_CLASS_HEARTBEAT  = "RPC:Heart"
@@ -241,7 +241,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		if rf.role == candidate && rf.currentTerm == args.Term {
 			rf.follow()
 		}
-	})
+	}, LOG_CLASS_APPEND)
 
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
@@ -325,7 +325,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 							rf.LogClass(LOG_CLASS_COMMIT, "Follower commit index updated: %d", rf.commitIndex)
 						}
 					}
-				})
+				}, LOG_CLASS_APPEND)
 			}
 		}
 	}
@@ -480,7 +480,7 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	rf.LogClass(LOG_CLASS_VOTE, "Recieve from %d: %+v", args.CandidateId, args)
 
-	rf.InLock(func() { rf.checkFollow(args) })
+	rf.InLock(func() { rf.checkFollow(args) }, LOG_CLASS_VOTE)
 
 	reply.Term = rf.currentTerm
 
@@ -496,7 +496,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 			reply.VoteGranted = true
 		}
-	})
+	}, LOG_CLASS_VOTE)
 
 	// Updated on stable storage before responding to RPCs
 	rf.persist()
@@ -551,8 +551,8 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// isLeader may unexpected changed after testing if no lock
-	rf.Lock()
-	defer rf.Unlock()
+	rf.Lock("Start")
+	defer rf.Unlock("Start")
 
 	index := -1
 	term := rf.currentTerm
@@ -728,28 +728,28 @@ func (rf *Raft) resetHeartbeatTimeout() {
 	rf.heartbeatTimer.Reset(heartbeatTimeout)
 }
 
-func (rf *Raft) Lock() {
+func (rf *Raft) Lock(name string) {
 	rf.mu.Lock()
 	rf.locked = true
-	rf.LogClass(LOG_CLASS_LOCK, "Lock")
+	rf.LogClass(LOG_CLASS_LOCK, "Lock: %s", name)
 }
 
-func (rf *Raft) Unlock() {
+func (rf *Raft) Unlock(name string) {
 	rf.locked = false
 	rf.mu.Unlock()
-	rf.LogClass(LOG_CLASS_LOCK, "Unlock")
+	rf.LogClass(LOG_CLASS_LOCK, "Unlock %s", name)
 }
 
-func (rf *Raft) InLock(f func()) {
-	rf.Lock()
-	defer rf.Unlock()
+func (rf *Raft) InLock(f func(), name string) {
+	rf.Lock(name)
+	defer rf.Unlock(name)
 
 	f()
 }
 
-func (rf *Raft) OutLock(f func()) {
-	rf.Unlock()
-	defer rf.Lock()
+func (rf *Raft) OutLock(f func(), name string) {
+	rf.Unlock(name)
+	defer rf.Lock(name)
 
 	f()
 }
@@ -765,7 +765,7 @@ func (rf *Raft) longrun() {
 					if rf.hasKilled() {
 						return
 					}
-					rf.InLock(func() { rf.campaign() })
+					rf.InLock(func() { rf.campaign() }, "Long-run campaign")
 				}()
 			case <-rf.killCh:
 				return
@@ -781,7 +781,7 @@ func (rf *Raft) longrun() {
 					if rf.hasKilled() {
 						return
 					}
-					rf.InLock(func() { rf.heartbeat() })
+					rf.InLock(func() { rf.heartbeat() }, "Long-run heartbeat")
 				}()
 			case <-rf.killCh:
 				return
@@ -794,7 +794,7 @@ func (rf *Raft) longrun() {
 			if rf.hasKilled() {
 				return
 			}
-			rf.InLock(func() { rf.apply() })
+			rf.InLock(func() { rf.apply() }, "Long-run applying")
 		}
 	}()
 }
@@ -856,7 +856,7 @@ func (rf *Raft) campaign() {
 				ok = rf.sendRequestVote(i, args, &reply)
 			}
 
-			rf.InLock(func() { rf.checkFollow(reply) })
+			rf.InLock(func() { rf.checkFollow(reply) }, "Campaign")
 
 			if rf.role == candidate && rf.currentTerm == currentTerm {
 				if reply.VoteGranted {
@@ -950,6 +950,8 @@ func (rf *Raft) heartbeat() {
 					return
 				}
 
+				rf.Lock(LOG_CLASS_HEARTBEAT)
+
 				index, term := rf.prevLogSignature(i)
 				args := AppendEntriesArgs{
 					Term:         currentTerm,
@@ -960,6 +962,8 @@ func (rf *Raft) heartbeat() {
 					LeaderCommit: rf.commitIndex,
 				}
 
+				rf.Unlock(LOG_CLASS_HEARTBEAT)
+
 				ok := false
 				ok = rf.sendAppendEntries(i, args, &reply)
 				rf.connected[i] = ok
@@ -967,7 +971,7 @@ func (rf *Raft) heartbeat() {
 				// If lost from majority of servers: become follower
 				if !rf.isConnected() {
 					rf.LogClass(LOG_CLASS_LIFECYCLE, "%d disconnected at term %d", rf.me, currentTerm)
-					rf.InLock(func() { rf.follow() })
+					rf.InLock(func() { rf.follow() }, LOG_CLASS_HEARTBEAT)
 				}
 
 				// Sended
@@ -980,7 +984,7 @@ func (rf *Raft) heartbeat() {
 				//   normal -> retry
 
 				if ok {
-					rf.InLock(func() { rf.checkFollow(reply) })
+					rf.InLock(func() { rf.checkFollow(reply) }, LOG_CLASS_HEARTBEAT)
 
 					if rf.role == leader && rf.currentTerm == currentTerm {
 						if reply.Success {
@@ -994,7 +998,7 @@ func (rf *Raft) heartbeat() {
 									}
 									rf.nextIndex[i] = lastLogIndex + 1
 									rf.matchIndex[i] = lastLogIndex
-								})
+								}, LOG_CLASS_HEARTBEAT)
 								rf.LogClass(LOG_CLASS_LEADING, "AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							}
 
@@ -1034,7 +1038,7 @@ func (rf *Raft) heartbeat() {
 									}
 									rf.nextIndex[i] = newNextIndex
 									rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d", i, rf.nextIndex[i])
-								})
+								}, LOG_CLASS_HEARTBEAT)
 							} else { // another coroutine has changed nextIndex[i] to smaller
 								rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
 								break
