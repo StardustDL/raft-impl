@@ -50,9 +50,9 @@ var (
 const (
 	unvoted              = -1
 	notfoundConflictTerm = -1
-	heartbeatTimeout     = time.Duration(40) * time.Millisecond
-	electionTimeoutMin   = 400 * time.Millisecond
-	electionTimeoutMax   = 500 * time.Millisecond
+	heartbeatTimeout     = time.Duration(50) * time.Millisecond
+	electionTimeoutMin   = 300 * time.Millisecond
+	electionTimeoutMax   = 600 * time.Millisecond
 	LOG_CLASS_HEARTBEAT  = "RPC:Heart"
 	LOG_CLASS_APPEND     = "RPC:Entry"
 	LOG_CLASS_VOTE       = "RPC:Voted"
