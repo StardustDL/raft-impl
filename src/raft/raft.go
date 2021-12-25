@@ -561,6 +561,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if isLeader {
 		rf.LogClass(LOG_CLASS_CLIENT, "Recieve request: %+v", command)
 
+		index = rf.createLogEntry(command)
+
+		rf.LogClass(LOG_CLASS_CLIENT, "Reply request %+v: %d", command, index)
+	}
+
+	return index, term, isLeader
+}
+
+func (rf *Raft) createLogEntry(command interface{}) int {
+	index := -1
+
+	if rf.role == leader {
+		rf.LogClass(LOG_CLASS_LIFECYCLE, "Create log entry: %+v", command)
+
 		// If command received from client: append entry to local log, respond after entry applied to state machine
 
 		entry := LogEntry{
@@ -582,10 +596,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		// start log entry sync
 		rf.heartbeat()
 
-		rf.LogClass(LOG_CLASS_CLIENT, "Reply request %+v: %d", command, index)
+		rf.LogClass(LOG_CLASS_CLIENT, "Create log entry %+v: %d", command, index)
 	}
 
-	return index, term, isLeader
+	return index
 }
 
 //
@@ -794,7 +808,8 @@ func (rf *Raft) longrun() {
 			if rf.hasKilled() {
 				return
 			}
-			rf.InLock(func() { rf.apply() }, "Long-run applying")
+			// rf.InLock(func() { rf.apply() }, "Long-run applying")
+			rf.apply()
 		}
 	}()
 }
@@ -856,23 +871,24 @@ func (rf *Raft) campaign() {
 				ok = rf.sendRequestVote(i, args, &reply)
 			}
 
-			rf.InLock(func() { rf.checkFollow(reply) }, "Campaign")
+			rf.InLock(func() {
+				rf.checkFollow(reply)
+				if rf.role == candidate && rf.currentTerm == currentTerm {
+					if reply.VoteGranted {
+						rf.LogClass(LOG_CLASS_ELECTION, "%d granted vote from %d at term %d", rf.me, i, currentTerm)
 
-			if rf.role == candidate && rf.currentTerm == currentTerm {
-				if reply.VoteGranted {
-					rf.LogClass(LOG_CLASS_ELECTION, "%d granted vote from %d at term %d", rf.me, i, currentTerm)
+						rf.voteGranted[i] = true
 
-					rf.voteGranted[i] = true
-
-					// If votes received from majority of servers: become leader
-					if rf.isWinner() {
-						rf.LogClass(LOG_CLASS_ELECTION, "%d win the election at term %d", rf.me, currentTerm)
-						rf.lead()
+						// If votes received from majority of servers: become leader
+						if rf.isWinner() {
+							rf.LogClass(LOG_CLASS_ELECTION, "%d win the election at term %d", rf.me, currentTerm)
+							rf.lead()
+						}
+					} else {
+						rf.LogClass(LOG_CLASS_ELECTION, "%d failed to grant vote from %d at term %d", rf.me, i, currentTerm)
 					}
-				} else {
-					rf.LogClass(LOG_CLASS_ELECTION, "%d failed to grant vote from %d at term %d", rf.me, i, currentTerm)
 				}
-			}
+			}, "Campaign")
 		}(i)
 	}
 }
