@@ -114,6 +114,7 @@ type Raft struct {
 	applyCh   chan ApplyMsg // a channel on which the tester or service expects Raft to send ApplyMsg messages
 	killCh    chan bool     // a channel for kill
 	locked    bool          // is the instance locked
+	hearted   int           // number of heartbeat
 
 	// Persistent state on all servers (Updated on stable storage before responding to RPCs)
 
@@ -165,9 +166,11 @@ func (rf *Raft) persist() {
 	}
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.logs)
+	rf.InLock(func() {
+		e.Encode(rf.currentTerm)
+		e.Encode(rf.votedFor)
+		e.Encode(rf.logs)
+	}, "Persist")
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
@@ -333,7 +336,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	}
 
 	// Updated on stable storage before responding to RPCs
-	rf.InLock(func() { rf.persist() }, "Persist")
+	rf.persist()
 
 	if args.isheartbeat() {
 		rf.LogClass(LOG_CLASS_HEARTBEAT, "Reply %t to %d: %+v", reply.Success, args.LeaderId, args)
@@ -499,7 +502,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	}, LOG_CLASS_VOTE)
 
 	// Updated on stable storage before responding to RPCs
-	rf.InLock(func() { rf.persist() }, "Persist")
+	rf.persist()
 
 	rf.LogClass(LOG_CLASS_VOTE, "Reply %t to %d: %+v", reply.VoteGranted, args.CandidateId, args)
 }
@@ -558,6 +561,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				rf.LogClass(LOG_CLASS_CLIENT, "Reply request %+v: %d", command, index)
 			}
 		}, "Start")
+
+		// Updated on stable storage before responding to RPCs
+		// > Leader does not responding to RPCs, just send RPCs.
+		rf.persist()
 	}
 
 	return index, rf.currentTerm, rf.role == leader
@@ -580,10 +587,6 @@ func (rf *Raft) createLogEntry(command interface{}) int {
 		lastLogIndex := rf.len()
 		rf.nextIndex[rf.me] = lastLogIndex + 1
 		rf.matchIndex[rf.me] = lastLogIndex
-
-		// Updated on stable storage before responding to RPCs
-		// > Leader does not responding to RPCs, just send RPCs.
-		rf.persist()
 
 		index = lastLogIndex
 
@@ -635,6 +638,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.applyCh = applyCh
 	rf.killCh = make(chan bool)
+	rf.hearted = 0
 	rf.locked = false
 
 	if DEBUG {
@@ -897,6 +901,9 @@ func (rf *Raft) checkFollow(data RpcTransferData) {
 	if data.term() > rf.currentTerm {
 		rf.currentTerm = data.term()
 		rf.follow()
+
+		// clear votedFor if rf is a follower before
+		rf.votedFor = unvoted
 	}
 }
 
@@ -906,7 +913,6 @@ func (rf *Raft) follow() {
 	}
 	rf.LogClass(LOG_CLASS_LIFECYCLE, "%d follow at term %d", rf.me, rf.currentTerm)
 	rf.role = follower
-
 	rf.votedFor = unvoted
 }
 
@@ -952,6 +958,8 @@ func (rf *Raft) heartbeat() {
 
 	lastLogIndex := rf.len()
 	currentTerm := rf.currentTerm
+	rf.hearted++
+	hearted := rf.hearted
 
 	for i := range rf.peers {
 		if i == rf.me {
@@ -960,7 +968,7 @@ func (rf *Raft) heartbeat() {
 		go func(i int) {
 			reply := AppendEntriesReply{}
 
-			for rf.role == leader && rf.currentTerm == currentTerm {
+			for rf.role == leader && rf.currentTerm == currentTerm && rf.hearted == hearted {
 				if rf.hasKilled() {
 					return
 				}
@@ -1002,14 +1010,14 @@ func (rf *Raft) heartbeat() {
 				if ok {
 					rf.InLock(func() { rf.checkFollow(reply) }, LOG_CLASS_HEARTBEAT)
 
-					if rf.role == leader && rf.currentTerm == currentTerm {
+					if rf.role == leader && rf.currentTerm == currentTerm && rf.hearted == hearted {
 						if reply.Success {
 							// If successful: update nextIndex and matchIndex for follower
 							if args.isheartbeat() {
 								rf.LogClass(LOG_CLASS_LEADING, "Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
 							} else {
 								rf.InLock(func() {
-									if rf.role != leader || rf.currentTerm != currentTerm || rf.matchIndex[i] >= lastLogIndex {
+									if rf.role != leader || rf.currentTerm != currentTerm || rf.hearted != hearted || rf.matchIndex[i] >= lastLogIndex {
 										return
 									}
 									rf.nextIndex[i] = lastLogIndex + 1
@@ -1049,7 +1057,7 @@ func (rf *Raft) heartbeat() {
 
 							if newNextIndex < rf.nextIndex[i] {
 								rf.InLock(func() {
-									if rf.role != leader || rf.currentTerm != currentTerm || newNextIndex >= rf.nextIndex[i] {
+									if rf.role != leader || rf.currentTerm != currentTerm || rf.hearted != hearted || newNextIndex >= rf.nextIndex[i] {
 										return
 									}
 									rf.nextIndex[i] = newNextIndex
