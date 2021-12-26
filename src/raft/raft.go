@@ -50,8 +50,8 @@ var (
 const (
 	unvoted              = -1
 	notfoundConflictTerm = -1
-	heartbeatTimeout     = time.Duration(50) * time.Millisecond
-	electionTimeoutMin   = 300 * time.Millisecond
+	heartbeatTimeout     = time.Duration(40) * time.Millisecond
+	electionTimeoutMin   = 400 * time.Millisecond
 	electionTimeoutMax   = 600 * time.Millisecond
 	LOG_CLASS_HEARTBEAT  = "RPC:Heart"
 	LOG_CLASS_APPEND     = "RPC:Entry"
@@ -333,18 +333,12 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	}
 
 	// Updated on stable storage before responding to RPCs
-	rf.persist()
-
-	issuccess := "SUCCESS"
-
-	if !reply.Success {
-		issuccess = "FAILED"
-	}
+	rf.InLock(func() { rf.persist() }, "Persist")
 
 	if args.isheartbeat() {
-		rf.LogClass(LOG_CLASS_HEARTBEAT, "Reply %s to %d: %+v", issuccess, args.LeaderId, args)
+		rf.LogClass(LOG_CLASS_HEARTBEAT, "Reply %t to %d: %+v", reply.Success, args.LeaderId, args)
 	} else {
-		rf.LogClass(LOG_CLASS_APPEND, "Reply %s to %d: from (%d, %d) with %d entries: %+v", issuccess, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
+		rf.LogClass(LOG_CLASS_APPEND, "Reply %t to %d: from (%d, %d) with %d entries: %+v", reply.Success, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), args)
 	}
 }
 
@@ -428,6 +422,10 @@ func (rf *Raft) Log(format string, v ...interface{}) {
 }
 
 func (rf *Raft) LogClass(class string, format string, v ...interface{}) {
+	if !DEBUG {
+		return
+	}
+
 	if !LOG_HEARTBEAT && class == LOG_CLASS_HEARTBEAT {
 		return
 	}
@@ -501,14 +499,9 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	}, LOG_CLASS_VOTE)
 
 	// Updated on stable storage before responding to RPCs
-	rf.persist()
+	rf.InLock(func() { rf.persist() }, "Persist")
 
-	isyes := "YES"
-
-	if !reply.VoteGranted {
-		isyes = "NO"
-	}
-	rf.LogClass(LOG_CLASS_VOTE, "Reply %s to %d: %+v", isyes, args.CandidateId, args)
+	rf.LogClass(LOG_CLASS_VOTE, "Reply %t to %d: %+v", reply.VoteGranted, args.CandidateId, args)
 }
 
 //
@@ -552,23 +545,22 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	// isLeader may unexpected changed after testing if no lock
-	rf.Lock("Start")
-	defer rf.Unlock("Start")
-
 	index := -1
-	term := rf.currentTerm
-	isLeader := rf.role == leader
 
-	if isLeader {
-		rf.LogClass(LOG_CLASS_CLIENT, "Recieve request: %+v", command)
+	if rf.role == leader {
+		// isLeader may unexpected changed after testing if no lock
+		rf.InLock(func() {
+			if rf.role == leader {
+				rf.LogClass(LOG_CLASS_CLIENT, "Recieve request: %+v", command)
 
-		index = rf.createLogEntry(command)
+				index = rf.createLogEntry(command)
 
-		rf.LogClass(LOG_CLASS_CLIENT, "Reply request %+v: %d", command, index)
+				rf.LogClass(LOG_CLASS_CLIENT, "Reply request %+v: %d", command, index)
+			}
+		}, "Start")
 	}
 
-	return index, term, isLeader
+	return index, rf.currentTerm, rf.role == leader
 }
 
 func (rf *Raft) createLogEntry(command interface{}) int {
@@ -873,11 +865,16 @@ func (rf *Raft) campaign() {
 				ok = rf.sendRequestVote(i, args, &reply)
 			}
 
-			rf.InLock(func() {
-				rf.checkFollow(reply)
-				if rf.role == candidate && rf.currentTerm == currentTerm {
-					if reply.VoteGranted {
-						rf.LogClass(LOG_CLASS_ELECTION, "%d granted vote from %d at term %d", rf.me, i, currentTerm)
+			rf.InLock(func() { rf.checkFollow(reply) }, "Campaign")
+
+			if rf.role == candidate && rf.currentTerm == currentTerm {
+				if reply.VoteGranted {
+					rf.LogClass(LOG_CLASS_ELECTION, "%d granted vote from %d at term %d", rf.me, i, currentTerm)
+
+					rf.InLock(func() {
+						if rf.role != candidate || rf.currentTerm != currentTerm {
+							return
+						}
 
 						rf.voteGranted[i] = true
 
@@ -886,11 +883,11 @@ func (rf *Raft) campaign() {
 							rf.LogClass(LOG_CLASS_ELECTION, "%d win the election at term %d", rf.me, currentTerm)
 							rf.lead()
 						}
-					} else {
-						rf.LogClass(LOG_CLASS_ELECTION, "%d failed to grant vote from %d at term %d", rf.me, i, currentTerm)
-					}
+					}, "Campaign")
+				} else {
+					rf.LogClass(LOG_CLASS_ELECTION, "%d failed to grant vote from %d at term %d", rf.me, i, currentTerm)
 				}
-			}, "Campaign")
+			}
 		}(i)
 	}
 }
@@ -968,19 +965,20 @@ func (rf *Raft) heartbeat() {
 					return
 				}
 
-				rf.Lock(LOG_CLASS_HEARTBEAT)
+				var index, term int
+				var args AppendEntriesArgs
 
-				index, term := rf.prevLogSignature(i)
-				args := AppendEntriesArgs{
-					Term:         currentTerm,
-					LeaderId:     rf.me,
-					PrevLogIndex: index,
-					PrevLogTerm:  term,
-					Entries:      rf.logs[index+1:],
-					LeaderCommit: rf.commitIndex,
-				}
-
-				rf.Unlock(LOG_CLASS_HEARTBEAT)
+				rf.InLock(func() {
+					index, term = rf.prevLogSignature(i)
+					args = AppendEntriesArgs{
+						Term:         currentTerm,
+						LeaderId:     rf.me,
+						PrevLogIndex: index,
+						PrevLogTerm:  term,
+						Entries:      rf.logs[index+1:],
+						LeaderCommit: rf.commitIndex,
+					}
+				}, LOG_CLASS_HEARTBEAT)
 
 				ok := false
 				ok = rf.sendAppendEntries(i, args, &reply)
