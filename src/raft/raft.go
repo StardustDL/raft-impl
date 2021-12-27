@@ -828,7 +828,7 @@ func (rf *Raft) isWinner() bool {
 
 // If election timeout elapses: start new election
 func (rf *Raft) campaign() {
-	if rf.role == leader {
+	if rf.role == leader || rf.hasKilled() {
 		return
 	}
 
@@ -902,10 +902,9 @@ func (rf *Raft) campaign() {
 func (rf *Raft) checkFollow(data RpcTransferData) {
 	if data.term() > rf.currentTerm {
 		rf.currentTerm = data.term()
-		rf.follow()
-
 		// clear votedFor if rf is a follower before
 		rf.votedFor = unvoted
+		rf.follow()
 	}
 }
 
@@ -950,7 +949,7 @@ func (rf *Raft) isConnected() bool {
 
 // Upon election: send initial empty AppendEntries RPCs (heartbeat) to each server; repeat during idle periods to prevent election timeouts
 func (rf *Raft) heartbeat() {
-	if rf.role != leader {
+	if rf.role != leader || rf.hasKilled() {
 		return
 	}
 
@@ -972,7 +971,9 @@ func (rf *Raft) heartbeat() {
 		go func(i int) {
 			reply := AppendEntriesReply{}
 
-			for rf.role == leader && rf.currentTerm == currentTerm && rf.hearted == hearted {
+			retry := true
+
+			for retry && rf.role == leader && rf.currentTerm == currentTerm && rf.hearted == hearted {
 				if rf.hasKilled() {
 					return
 				}
@@ -995,7 +996,7 @@ func (rf *Raft) heartbeat() {
 				ok := false
 				ok = rf.sendAppendEntries(i, args, &reply)
 
-				retry := true
+				retry = !ok
 
 				rf.InLock(func() {
 					if !(rf.role == leader && rf.currentTerm == currentTerm && rf.hearted == hearted) {
@@ -1019,75 +1020,67 @@ func (rf *Raft) heartbeat() {
 					//	   heartbeat -> retry
 					//     normal -> retry
 					// Unsended
-					//   heartbeat -> break
+					//   heartbeat -> retry // break?
 					//   normal -> retry
 
-					if ok {
-						rf.checkFollow(reply)
+					if !ok {
+						return
+					}
 
-						if rf.role == leader {
-							if reply.Success {
-								// If successful: update nextIndex and matchIndex for follower
-								if args.isheartbeat() {
-									rf.LogClass(LOG_CLASS_LEADING, "Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
-								} else {
-									if rf.matchIndex[i] < lastLogIndex {
-										rf.nextIndex[i] = lastLogIndex + 1
-										rf.matchIndex[i] = lastLogIndex
-									}
-									rf.LogClass(LOG_CLASS_LEADING, "AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
-								}
+					rf.checkFollow(reply)
 
-								retry = false
-							} else {
-								// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-								if args.isheartbeat() {
-									rf.LogClass(LOG_CLASS_LEADING, "Hearbeat fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
-								} else {
-									rf.LogClass(LOG_CLASS_LEADING, "AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
-								}
+					if rf.role != leader {
+						return
+					}
 
-								newNextIndex := index
+					if reply.Success {
+						// If successful: update nextIndex and matchIndex for follower
+						if args.isheartbeat() {
+							rf.LogClass(LOG_CLASS_LEADING, "Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+						} else {
+							if rf.matchIndex[i] < lastLogIndex {
+								rf.nextIndex[i] = lastLogIndex + 1
+								rf.matchIndex[i] = lastLogIndex
+							}
+							rf.LogClass(LOG_CLASS_LEADING, "AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+						}
+					} else {
+						// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+						if args.isheartbeat() {
+							rf.LogClass(LOG_CLASS_LEADING, "Hearbeat fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+						} else {
+							rf.LogClass(LOG_CLASS_LEADING, "AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+						}
 
-								if !DISABLE_NEXTINDEX_BIGSTEP {
-									// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
-									// For example, when rejecting an AppendEntries request, the follower
-									// can include the term of the conflicting entry
-									// and the first index it stores for that term.
-									// With this information, the leader can decrement nextIndex to bypass all of the conflicting entries in that term;
-									// one AppendEntries RPC will be required for each term with conflicting entries,
-									// rather than one RPC per entry.
-									// In practice, we doubt this optimization is necessary, since failures happen infrequently and it is unlikely that there will be many inconsistent entries.
+						newNextIndex := index
 
-									newNextIndex = reply.ConflictIndex
-									if reply.ConflictTerm != notfoundConflictTerm {
-										for newNextIndex <= lastLogIndex && rf.logs[newNextIndex].Term == reply.ConflictTerm {
-											newNextIndex++
-										}
-									}
-								}
+						if !DISABLE_NEXTINDEX_BIGSTEP {
+							// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
+							// For example, when rejecting an AppendEntries request, the follower
+							// can include the term of the conflicting entry
+							// and the first index it stores for that term.
+							// With this information, the leader can decrement nextIndex to bypass all of the conflicting entries in that term;
+							// one AppendEntries RPC will be required for each term with conflicting entries,
+							// rather than one RPC per entry.
+							// In practice, we doubt this optimization is necessary, since failures happen infrequently and it is unlikely that there will be many inconsistent entries.
 
-								if newNextIndex < rf.nextIndex[i] {
-									if newNextIndex < rf.nextIndex[i] {
-										rf.nextIndex[i] = newNextIndex
-										rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d", i, rf.nextIndex[i])
-									}
-								} else { // another coroutine has changed nextIndex[i] to smaller
-									rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
-									retry = false
+							newNextIndex = reply.ConflictIndex
+							if reply.ConflictTerm != notfoundConflictTerm {
+								for newNextIndex <= lastLogIndex && rf.logs[newNextIndex].Term == reply.ConflictTerm {
+									newNextIndex++
 								}
 							}
 						}
-					} else {
-						if args.isheartbeat() {
-							retry = false
+
+						if newNextIndex < rf.nextIndex[i] {
+							rf.nextIndex[i] = newNextIndex
+							rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d", i, rf.nextIndex[i])
+							retry = true
+						} else { // another coroutine has changed nextIndex[i] to smaller
+							rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
 						}
 					}
 				}, LOG_CLASS_HEARTBEAT)
-
-				if !retry {
-					break
-				}
 			}
 		}(i)
 	}
