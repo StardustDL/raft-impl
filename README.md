@@ -1,12 +1,19 @@
-# Raft
+![Raft](https://socialify.git.ci/StardustDL/raft-impl/image?description=1&font=Bitter&forks=1&issues=1&language=1&owner=1&pulls=1&stargazers=1&theme=Light)
+
+![CI](https://github.com/StardustDL/raft-impl/workflows/CI/badge.svg) ![](https://img.shields.io/github/license/StardustDL/raft-impl.svg)
 
 A demo 1-to-1 implementation in Golang for Raft Consensus algorithm according to the [paper](https://raft.github.io/raft.pdf), based on 6.824's raft labs, with the following core features supported.
 
 - Leader Election
 - Log Replication
-- Persistence
+- Persistence (opt-out)
 
-> This implement uses mutex lock shortly and enable big step descreasing nextIndex.
+This implement has the following extra features.
+
+- Use mutex lock shortly.
+- Full logging (opt-in).
+- Enable big-step descreasing nextIndex (opt-out).
+- Check disconnecting and convert to follower (opt-in).
 
 ## Testing
 
@@ -23,7 +30,7 @@ The project detect a runtime environment variable **`DEBUG`**.
 - Enable lock logging, if it contains `L`.
 - Enable follow when disconnected, if it contains `D`.
 - Disable persisting, if it contains `p`.
-- Disable the optimization for big step to decrease nextIndex, if it contains `b`
+- Disable the optimization for big-step to decrease nextIndex, if it contains `b`
 
 ### Group Tests
 
@@ -52,9 +59,11 @@ python ./batch_test.py "test collection name"
   [-w <parallelism=the number of CPU cores>]
 ```
 
-Suggest set `-w 1` to use serial testing since some tests will fail when run them parallel.
+Recommend to set `-w 1` to use serial testing since some tests will fail when run them parallel.
 
 The result will be under the directory `logs`. All failed tests' logs will be recorded.
+
+Also you can execute `test.sh` to run serial and parallel batch-tests.
 
 ## Results
 
