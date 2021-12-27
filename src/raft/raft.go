@@ -981,7 +981,13 @@ func (rf *Raft) heartbeat() {
 				var index, term int
 				var args AppendEntriesArgs
 
+				send := true
+
 				rf.InLock(func() {
+					if !(rf.role == leader && rf.currentTerm == currentTerm && rf.hearted == hearted) {
+						send = false
+						return
+					}
 					index, term = rf.prevLogSignature(i)
 					args = AppendEntriesArgs{
 						Term:         currentTerm,
@@ -994,7 +1000,12 @@ func (rf *Raft) heartbeat() {
 				}, LOG_CLASS_HEARTBEAT)
 
 				ok := false
-				ok = rf.sendAppendEntries(i, args, &reply)
+
+				if send {
+					ok = rf.sendAppendEntries(i, args, &reply)
+				} else {
+					break
+				}
 
 				retry = !ok
 
