@@ -21,6 +21,7 @@ The project detect a runtime environment variable **`DEBUG`**.
 - Enable heartbeat logging, if it contains `H`.
 - Enable timer logging, if it contains `T`.
 - Enable lock logging, if it contains `L`.
+- Enable follow when disconnected, if it contains `D`.
 - Disable persisting, if it contains `p`.
 - Disable the optimization for big step to decrease nextIndex, if it contains `b`
 

@@ -41,6 +41,7 @@ var (
 	LOG_LOCK                  = false
 	DISABLE_PERSIST           = false
 	DISABLE_NEXTINDEX_BIGSTEP = false // disable the optimization for big step to decrease nextIndex
+	ENABLE_DISCONNECT         = false
 )
 
 // Raft’s RPCs typically require the recipient to persist information to stable storage,
@@ -51,6 +52,7 @@ const (
 	unvoted              = -1
 	notfoundConflictTerm = -1
 	heartbeatTimeout     = time.Duration(40) * time.Millisecond
+	applyTimeout         = time.Duration(10) * time.Millisecond
 	electionTimeoutMin   = 400 * time.Millisecond
 	electionTimeoutMax   = 600 * time.Millisecond
 	LOG_CLASS_HEARTBEAT  = "RPC:Heart"
@@ -145,6 +147,7 @@ type Raft struct {
 
 	heartbeatTimer *time.Timer
 	electionTimer  *time.Timer
+	applyTimer     *time.Timer
 }
 
 // return currentTerm and whether this server
@@ -246,29 +249,14 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		if rf.role == candidate && rf.currentTerm == args.Term {
 			rf.follow()
 		}
-	}, LOG_CLASS_APPEND)
-
-	reply.Term = rf.currentTerm
-	if args.Term < rf.currentTerm {
-		// Reply false if term < currentTerm
-		reply.Success = false
-	} else { // assume rpc is from current leader
-		// receiving AppendEntries RPC from current leader
-		rf.resetElectionTimeout()
-		if args.PrevLogIndex > rf.len() {
-			// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
+		reply.Term = rf.currentTerm
+		if args.Term < rf.currentTerm {
+			// Reply false if term < currentTerm
 			reply.Success = false
-
-			if !DISABLE_NEXTINDEX_BIGSTEP {
-				// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
-				// For example, when rejecting an AppendEntries request, the follower
-				// can include the term of the conflicting entry
-				// and the first index it stores for that term.
-				reply.ConflictIndex = rf.len() + 1
-				reply.ConflictTerm = notfoundConflictTerm
-			}
-		} else {
-			if args.PrevLogIndex >= 1 && rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+		} else { // assume rpc is from current leader
+			// receiving AppendEntries RPC from current leader
+			rf.resetElectionTimeout()
+			if args.PrevLogIndex > rf.len() {
 				// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 				reply.Success = false
 
@@ -277,24 +265,36 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 					// For example, when rejecting an AppendEntries request, the follower
 					// can include the term of the conflicting entry
 					// and the first index it stores for that term.
+					reply.ConflictIndex = rf.len() + 1
+					reply.ConflictTerm = notfoundConflictTerm
+				}
+			} else {
+				if args.PrevLogIndex >= 1 && rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+					// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
+					reply.Success = false
 
-					reply.ConflictTerm = rf.logs[args.PrevLogIndex].Term
+					if !DISABLE_NEXTINDEX_BIGSTEP {
+						// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
+						// For example, when rejecting an AppendEntries request, the follower
+						// can include the term of the conflicting entry
+						// and the first index it stores for that term.
 
-					firstIndex := args.PrevLogIndex
-					for firstIndex-1 >= 1 && rf.logs[firstIndex-1].Term == reply.ConflictTerm {
-						firstIndex--
+						reply.ConflictTerm = rf.logs[args.PrevLogIndex].Term
+
+						firstIndex := args.PrevLogIndex
+						for firstIndex-1 >= 1 && rf.logs[firstIndex-1].Term == reply.ConflictTerm {
+							firstIndex--
+						}
+
+						reply.ConflictIndex = firstIndex
 					}
 
-					reply.ConflictIndex = firstIndex
-				}
+					// If an existing entry conflicts with a new one (same index but different terms)
+					// delete the existing entry and all that follow it
+					rf.logs = rf.logs[:args.PrevLogIndex]
+				} else { // args.PrevLogIndex == 0 or rf.logs[args.PrevLogIndex].Term == args.PrevLogTerm
+					reply.Success = true
 
-				// If an existing entry conflicts with a new one (same index but different terms)
-				// delete the existing entry and all that follow it
-				rf.logs = rf.logs[:args.PrevLogIndex]
-			} else { // args.PrevLogIndex == 0 or rf.logs[args.PrevLogIndex].Term == args.PrevLogTerm
-				reply.Success = true
-
-				rf.InLock(func() {
 					// Append any new entries not already in the log
 
 					// If an existing entry conflicts with a new one (same index but different terms)
@@ -330,10 +330,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 							rf.LogClass(LOG_CLASS_COMMIT, "Follower commit index updated: %d", rf.commitIndex)
 						}
 					}
-				}, LOG_CLASS_APPEND)
+				}
 			}
 		}
-	}
+	}, LOG_CLASS_APPEND)
 
 	// Updated on stable storage before responding to RPCs
 	rf.persist()
@@ -483,14 +483,17 @@ func (rf *Raft) isUpToDate(lastLogIndex int, lastLogTerm int) bool {
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	rf.LogClass(LOG_CLASS_VOTE, "Recieve from %d: %+v", args.CandidateId, args)
 
-	rf.InLock(func() { rf.checkFollow(args) }, LOG_CLASS_VOTE)
-
-	reply.Term = rf.currentTerm
-
-	// Reply false if term < currentTerm
-	// If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote
+	lastIndex, lastTerm := 0, 0
 
 	rf.InLock(func() {
+		rf.checkFollow(args)
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		lastIndex, lastTerm = rf.lastLogSignature()
+
+		// Reply false if term < currentTerm
+		// If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote
+
 		if args.Term >= rf.currentTerm && (rf.votedFor == unvoted || rf.votedFor == args.CandidateId) && rf.isUpToDate(args.LastLogIndex, args.LastLogTerm) {
 			rf.votedFor = args.CandidateId
 
@@ -504,7 +507,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// Updated on stable storage before responding to RPCs
 	rf.persist()
 
-	rf.LogClass(LOG_CLASS_VOTE, "Reply %t to %d: %+v", reply.VoteGranted, args.CandidateId, args)
+	rf.LogClass(LOG_CLASS_VOTE, "Reply %t to %d, voted to %d (last[%d]: %d): %+v", reply.VoteGranted, args.CandidateId, rf.votedFor, lastIndex, lastTerm, args)
 }
 
 //
@@ -629,6 +632,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	LOG_HEARTBEAT = strings.Contains(debugEnv, "H")
 	DISABLE_PERSIST = strings.Contains(debugEnv, "p")
 	DISABLE_NEXTINDEX_BIGSTEP = strings.Contains(debugEnv, "b")
+	ENABLE_DISCONNECT = strings.Contains(debugEnv, "D")
 	LOG_TIMEOUT = strings.Contains(debugEnv, "T")
 	LOG_LOCK = strings.Contains(debugEnv, "L")
 
@@ -662,6 +666,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.heartbeatTimer = time.NewTimer(heartbeatTimeout)
 	rf.electionTimer = time.NewTimer(getRandomizedElectionTimeout())
+	rf.applyTimer = time.NewTimer(applyTimeout)
 
 	rf.voteGranted = make([]bool, len(peers))
 
@@ -711,7 +716,7 @@ func (rf *Raft) apply() {
 		rf.updateCommitIndex()
 	}
 
-	if rf.commitIndex > rf.lastApplied {
+	for rf.commitIndex > rf.lastApplied {
 		cur := rf.lastApplied + 1
 		msg := ApplyMsg{
 			Index:       cur,
@@ -770,8 +775,8 @@ func (rf *Raft) longrun() {
 	rf.LogClass(LOG_CLASS_LIFECYCLE, "Long running...")
 	go func() {
 		for {
-			// If election timeout elapses: start new election
 			select {
+			// If election timeout elapses: start new election
 			case <-rf.electionTimer.C:
 				go func() {
 					if rf.hasKilled() {
@@ -779,15 +784,6 @@ func (rf *Raft) longrun() {
 					}
 					rf.InLock(func() { rf.campaign() }, "Long-run campaign")
 				}()
-			case <-rf.killCh:
-				return
-			}
-		}
-	}()
-
-	go func() {
-		for {
-			select {
 			case <-rf.heartbeatTimer.C:
 				go func() {
 					if rf.hasKilled() {
@@ -803,11 +799,18 @@ func (rf *Raft) longrun() {
 
 	go func() {
 		for {
-			if rf.hasKilled() {
+			select {
+			case <-rf.applyTimer.C:
+				go func() {
+					if rf.hasKilled() {
+						return
+					}
+					rf.InLock(func() { rf.apply() }, "Long-run applying")
+				}()
+				rf.applyTimer.Reset(applyTimeout)
+			case <-rf.killCh:
 				return
 			}
-			// rf.InLock(func() { rf.apply() }, "Long-run applying")
-			rf.apply()
 		}
 	}()
 }
@@ -869,29 +872,28 @@ func (rf *Raft) campaign() {
 				ok = rf.sendRequestVote(i, args, &reply)
 			}
 
-			rf.InLock(func() { rf.checkFollow(reply) }, "Campaign")
-
-			if rf.role == candidate && rf.currentTerm == currentTerm {
+			rf.InLock(func() {
+				if !(rf.role == candidate && rf.currentTerm == currentTerm) {
+					return
+				}
+				rf.checkFollow(reply)
+				if rf.role != candidate {
+					return
+				}
 				if reply.VoteGranted {
 					rf.LogClass(LOG_CLASS_ELECTION, "%d granted vote from %d at term %d", rf.me, i, currentTerm)
 
-					rf.InLock(func() {
-						if rf.role != candidate || rf.currentTerm != currentTerm {
-							return
-						}
+					rf.voteGranted[i] = true
 
-						rf.voteGranted[i] = true
-
-						// If votes received from majority of servers: become leader
-						if rf.isWinner() {
-							rf.LogClass(LOG_CLASS_ELECTION, "%d win the election at term %d", rf.me, currentTerm)
-							rf.lead()
-						}
-					}, "Campaign")
+					// If votes received from majority of servers: become leader
+					if rf.isWinner() {
+						rf.LogClass(LOG_CLASS_ELECTION, "%d win the election at term %d", rf.me, currentTerm)
+						rf.lead()
+					}
 				} else {
 					rf.LogClass(LOG_CLASS_ELECTION, "%d failed to grant vote from %d at term %d", rf.me, i, currentTerm)
 				}
-			}
+			}, "Campaign")
 		}(i)
 	}
 }
@@ -926,7 +928,9 @@ func (rf *Raft) lead() {
 	for i := range rf.peers {
 		rf.nextIndex[i] = lastIndex + 1
 		rf.matchIndex[i] = 0
-		rf.connected[i] = true
+		if ENABLE_DISCONNECT {
+			rf.connected[i] = true
+		}
 	}
 
 	// Upon election: send heartbeat to each server to prevent election timeouts
@@ -990,89 +994,99 @@ func (rf *Raft) heartbeat() {
 
 				ok := false
 				ok = rf.sendAppendEntries(i, args, &reply)
-				rf.connected[i] = ok
 
-				// If lost from majority of servers: become follower
-				if !rf.isConnected() {
-					rf.LogClass(LOG_CLASS_LIFECYCLE, "%d disconnected at term %d", rf.me, currentTerm)
-					rf.InLock(func() { rf.follow() }, LOG_CLASS_HEARTBEAT)
-				}
+				retry := true
 
-				// Sended
-				//	 Success -> break
-				//   Fail
-				//	   heartbeat -> retry
-				//     normal -> retry
-				// Unsended
-				//   heartbeat -> break
-				//   normal -> retry
+				rf.InLock(func() {
+					if !(rf.role == leader && rf.currentTerm == currentTerm && rf.hearted == hearted) {
+						return
+					}
 
-				if ok {
-					rf.InLock(func() { rf.checkFollow(reply) }, LOG_CLASS_HEARTBEAT)
+					if ENABLE_DISCONNECT {
+						rf.connected[i] = ok
 
-					if rf.role == leader && rf.currentTerm == currentTerm && rf.hearted == hearted {
-						if reply.Success {
-							// If successful: update nextIndex and matchIndex for follower
-							if args.isheartbeat() {
-								rf.LogClass(LOG_CLASS_LEADING, "Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
-							} else {
-								rf.InLock(func() {
-									if rf.role != leader || rf.currentTerm != currentTerm || rf.hearted != hearted || rf.matchIndex[i] >= lastLogIndex {
-										return
-									}
-									rf.nextIndex[i] = lastLogIndex + 1
-									rf.matchIndex[i] = lastLogIndex
-								}, LOG_CLASS_HEARTBEAT)
-								rf.LogClass(LOG_CLASS_LEADING, "AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
-							}
+						// If lost from majority of servers: become follower
 
-							break
-						} else {
-							// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-							if args.isheartbeat() {
-								rf.LogClass(LOG_CLASS_LEADING, "Hearbeat fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
-							} else {
-								rf.LogClass(LOG_CLASS_LEADING, "AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
-							}
-
-							newNextIndex := index
-
-							if !DISABLE_NEXTINDEX_BIGSTEP {
-								// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
-								// For example, when rejecting an AppendEntries request, the follower
-								// can include the term of the conflicting entry
-								// and the first index it stores for that term.
-								// With this information, the leader can decrement nextIndex to bypass all of the conflicting entries in that term;
-								// one AppendEntries RPC will be required for each term with conflicting entries,
-								// rather than one RPC per entry.
-								// In practice, we doubt this optimization is necessary, since failures happen infrequently and it is unlikely that there will be many inconsistent entries.
-
-								newNextIndex = reply.ConflictIndex
-								if reply.ConflictTerm != notfoundConflictTerm {
-									for newNextIndex <= lastLogIndex && rf.logs[newNextIndex].Term == reply.ConflictTerm {
-										newNextIndex++
-									}
-								}
-							}
-
-							if newNextIndex < rf.nextIndex[i] {
-								rf.InLock(func() {
-									if rf.role != leader || rf.currentTerm != currentTerm || rf.hearted != hearted || newNextIndex >= rf.nextIndex[i] {
-										return
-									}
-									rf.nextIndex[i] = newNextIndex
-									rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d", i, rf.nextIndex[i])
-								}, LOG_CLASS_HEARTBEAT)
-							} else { // another coroutine has changed nextIndex[i] to smaller
-								rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
-								break
-							}
+						if !rf.isConnected() {
+							rf.LogClass(LOG_CLASS_LIFECYCLE, "%d disconnected at term %d", rf.me, currentTerm)
+							rf.follow()
 						}
 					}
-				} else {
-					if args.isheartbeat() {
-						break
+
+					// Sended
+					//	 Success -> break
+					//   Fail
+					//	   heartbeat -> retry
+					//     normal -> retry
+					// Unsended
+					//   heartbeat -> break
+					//   normal -> retry
+
+					if ok {
+						rf.checkFollow(reply)
+
+						if rf.role == leader {
+							if reply.Success {
+								// If successful: update nextIndex and matchIndex for follower
+								if args.isheartbeat() {
+									rf.LogClass(LOG_CLASS_LEADING, "Heartbeat success for %d, nextIndex %d, matchIndex %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+								} else {
+									if rf.matchIndex[i] < lastLogIndex {
+										rf.nextIndex[i] = lastLogIndex + 1
+										rf.matchIndex[i] = lastLogIndex
+									}
+									rf.LogClass(LOG_CLASS_LEADING, "AppendEntries success for %d, nextIndex -> %d, matchIndex -> %d: %+v", i, rf.nextIndex[i], rf.matchIndex[i], args)
+								}
+
+								retry = false
+							} else {
+								// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+								if args.isheartbeat() {
+									rf.LogClass(LOG_CLASS_LEADING, "Hearbeat fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+								} else {
+									rf.LogClass(LOG_CLASS_LEADING, "AppendEntries fails at %d with term %d: response %+v, reply %+v", args.PrevLogIndex, args.PrevLogTerm, args, reply)
+								}
+
+								newNextIndex := index
+
+								if !DISABLE_NEXTINDEX_BIGSTEP {
+									// If desired, the protocol can be optimized to reduce the number of rejected AppendEntries RPCs.
+									// For example, when rejecting an AppendEntries request, the follower
+									// can include the term of the conflicting entry
+									// and the first index it stores for that term.
+									// With this information, the leader can decrement nextIndex to bypass all of the conflicting entries in that term;
+									// one AppendEntries RPC will be required for each term with conflicting entries,
+									// rather than one RPC per entry.
+									// In practice, we doubt this optimization is necessary, since failures happen infrequently and it is unlikely that there will be many inconsistent entries.
+
+									newNextIndex = reply.ConflictIndex
+									if reply.ConflictTerm != notfoundConflictTerm {
+										for newNextIndex <= lastLogIndex && rf.logs[newNextIndex].Term == reply.ConflictTerm {
+											newNextIndex++
+										}
+									}
+								}
+
+								if newNextIndex < rf.nextIndex[i] {
+									if newNextIndex < rf.nextIndex[i] {
+										rf.nextIndex[i] = newNextIndex
+										rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d", i, rf.nextIndex[i])
+									}
+								} else { // another coroutine has changed nextIndex[i] to smaller
+									rf.LogClass(LOG_CLASS_LEADING, "nextIndex[%d] -> %d (by another coroutine)", i, rf.nextIndex[i])
+									retry = false
+								}
+							}
+						}
+					} else {
+						if args.isheartbeat() {
+							retry = false
+						}
 					}
+				}, LOG_CLASS_HEARTBEAT)
+
+				if !retry {
+					break
 				}
 			}
 		}(i)

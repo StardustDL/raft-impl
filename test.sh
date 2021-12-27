@@ -13,7 +13,7 @@ echo "Parallel enable log"
 date
 python -u ./batch_test.py all -c 1000 > ./logs/$file-pl.log 2>&1
 cat ./logs/$file-pl.log | tail -n 17
-echo ")arallel disable log"
+echo "Parallel disable log"
 date
 python -u ./batch_test.py all -c 1000 -f "" > ./logs/$file-pn.log 2>&1
 cat ./logs/$file-pn.log | tail -n 17
