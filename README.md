@@ -63,7 +63,26 @@ Recommend to set `-w 1` to use serial testing since some tests will fail when ru
 
 The result will be under the directory `logs`. All failed tests' logs will be recorded.
 
-Also you can execute `test.sh` to run serial and parallel batch-tests.
+### Correctness Checking Tests
+
+`check.sh` use batch test script in 4 running stages (divided into the following 2 axes) to check correctness.
+
+||**Logging**|**No Logging**|
+|-|-|-|
+|**Serial**|Stage 1|Stage 2|
+|**Parallel**|Staget 3|Stage 4|
+
+```sh
+./check.sh
+```
+
+### Large-scale Tests
+
+`test.sh` use parallel (use 3x-processor workers) and no logging mode to run all tests.
+
+```sh
+./test.sh <count>
+```
 
 ## Results
 
