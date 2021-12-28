@@ -134,7 +134,6 @@ ok      raft    166.841s
 > The result from the command `python ./batch_test.py all -c 100 -w 1`.
 
 ```
-Figure8Unreliable: 74.0% (74/100)
 Backup: 100.0% (100/100)
 BasicAgree: 100.0% (100/100)
 ConcurrentStarts: 100.0% (100/100)
@@ -142,6 +141,7 @@ Count: 100.0% (100/100)
 FailAgree: 100.0% (100/100)
 FailNoAgree: 100.0% (100/100)
 Figure8: 100.0% (100/100)
+Figure8Unreliable: 100.0% (100/100)
 InitialElection: 100.0% (100/100)
 Persist1: 100.0% (100/100)
 Persist2: 100.0% (100/100)
