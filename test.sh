@@ -5,7 +5,7 @@ exit 1;
 fi
 
 processors="$(cat /proc/cpuinfo | grep 'physical id' | wc -l)"
-workers="$(($processors*5))"
+workers="$(($processors*10))"
 file="$(date "+%Y-%m-%d-%H-%M-%S")"
 
 echo "Start Large Scale ($1 cases, $workers workers) (Parallel (Disabled Logging)) > ls-$file.log"
