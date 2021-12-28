@@ -915,6 +915,7 @@ func (rf *Raft) follow() {
 	rf.LogClass(LOG_CLASS_LIFECYCLE, "%d follow at term %d", rf.me, rf.currentTerm)
 	rf.role = follower
 	rf.votedFor = unvoted
+	rf.resetElectionTimeout()
 }
 
 func (rf *Raft) lead() {
