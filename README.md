@@ -14,6 +14,8 @@ This implement has the following extra features.
 - Full logging (opt-in).
 - Enable big-step descreasing nextIndex (opt-out).
 - Check disconnecting and convert to follower (opt-in).
+- More than **99.999%** availability through all tests in parallel.
+  - Passed more than 100000 parallel batch tests.
 
 ## Testing
 
@@ -58,8 +60,6 @@ python ./batch_test.py "test collection name"
   [-f <DEBUG Flags="HTL">]
   [-w <parallelism=the number of CPU cores>]
 ```
-
-Recommend to set `-w 1` to use serial testing since some tests will fail when run them parallel.
 
 The result will be under the directory `logs`. All failed tests' logs will be recorded.
 
@@ -131,24 +131,25 @@ ok      raft    166.841s
 
 ### Batch Tests
 
-> The result from the command `python ./batch_test.py all -c 100 -w 1`.
+> The result from the command `./test.sh 100000`.
 
 ```
-Backup: 100.0% (100/100)
-BasicAgree: 100.0% (100/100)
-ConcurrentStarts: 100.0% (100/100)
-Count: 100.0% (100/100)
-FailAgree: 100.0% (100/100)
-FailNoAgree: 100.0% (100/100)
-Figure8: 100.0% (100/100)
-Figure8Unreliable: 100.0% (100/100)
-InitialElection: 100.0% (100/100)
-Persist1: 100.0% (100/100)
-Persist2: 100.0% (100/100)
-Persist3: 100.0% (100/100)
-ReElection: 100.0% (100/100)
-Rejoin: 100.0% (100/100)
-ReliableChurn: 100.0% (100/100)
-UnreliableAgree: 100.0% (100/100)
-UnreliableChurn: 100.0% (100/100)
+Start Large Scale (100000 cases, 120 workers) (Parallel (Disabled Logging))
+Backup: 100.0% (100000/100000)
+BasicAgree: 100.0% (100000/100000)
+ConcurrentStarts: 100.0% (100000/100000)
+Count: 100.0% (100000/100000)
+FailAgree: 100.0% (100000/100000)
+FailNoAgree: 100.0% (100000/100000)
+Figure8: 100.0% (100000/100000)
+Figure8Unreliable: 100.0% (100000/100000)
+InitialElection: 100.0% (100000/100000)
+Persist1: 100.0% (100000/100000)
+Persist2: 100.0% (100000/100000)
+Persist3: 100.0% (100000/100000)
+ReElection: 100.0% (100000/100000)
+Rejoin: 100.0% (100000/100000)
+ReliableChurn: 100.0% (100000/100000)
+UnreliableAgree: 100.0% (100000/100000)
+UnreliableChurn: 100.0% (100000/100000)
 ```
