@@ -32,9 +32,9 @@ jobs:
     - name: Batch tests (Parallel Logging)
       run: python3 ./batch_test.py all -c 10
     - name: Batch tests (Serial No-logging)
-      run: python3 ./batch_test.py all -f '' -w 1 -c 5
+      run: python3 ./batch_test.py all -f ' ' -w 1 -c 5
     - name: Batch tests (Parallel No-logging)
-      run: python3 ./batch_test.py all -f '' -c 10
+      run: python3 ./batch_test.py all -f ' ' -c 10
     - name: Batch results
       run: cat ./logs/*/result.log
     - name: Upload artifacts

@@ -159,7 +159,7 @@ def main():
     name = args.name
     cnt = args.count
     workers = args.worker
-    flags = args.flag
+    flags = args.flag.strip()
     names = TESTS[name]
 
     now = datetime.now()

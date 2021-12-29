@@ -60,7 +60,7 @@ pwsh -c ./tests/all.ps1
 ```sh
 python ./batch_test.py "test collection name"
   [-c <replication count=10>]
-  [-f <DEBUG Flags="HTL">]
+  [-f <DEBUG Flags (will be striped)="HTL">]
   [-w <parallelism=the number of CPU cores>]
 ```
 
