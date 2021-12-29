@@ -1,5 +1,5 @@
 $env:GOPATH=$PWD
 $env:GO111MODULE="off"
 Set-Location src/raft
-go test
+go test -v
 Set-Location ../..

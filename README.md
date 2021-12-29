@@ -28,10 +28,10 @@ go test
 The project detect a runtime environment variable **`DEBUG`**.
 
 - Enable debug mode and logging, if it exists and it is not empty (any non-empty values is OK).
-- Enable heartbeat logging, if it contains `H`.
-- Enable timer logging, if it contains `T`.
-- Enable lock logging, if it contains `L`.
-- Enable follow when disconnected, if it contains `D`.
+- Enable logging heartbeat, if it contains `H`.
+- Enable logging timer, if it contains `T`.
+- Enable logging lock, if it contains `L`.
+- Enable detecting disconnect, if it contains `D`.
 - Disable persisting, if it contains `p`.
 - Disable the optimization for big-step to decrease nextIndex, if it contains `b`
 
