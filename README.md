@@ -10,10 +10,11 @@ A demo 1-to-1 implementation in Golang for Raft Consensus algorithm according to
 
 This implement has the following extra features.
 
-- Use mutex lock shortly.
+- Using mutex lock shortly.
+- Gracefully killing.
+- Enabling big-step descreasing nextIndex (opt-out).
 - Full logging (opt-in).
-- Enable big-step descreasing nextIndex (opt-out).
-- Check disconnecting and convert to follower (opt-in).
+- Detecting disconnecting to convert to follower (opt-in).
 - More than **99.999%** availability through all tests in parallel.
   - Passed more than 100000 parallel batch tests.
 
