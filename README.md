@@ -18,6 +18,8 @@ This implement has the following extra features.
 - More than **99.999%** availability through all tests in parallel.
   - Passed more than 100000 parallel batch tests.
 
+> All commits are automatically tested (in small scale) by GitHub Actions, you can see real-time testing results at [there](https://github.com/StardustDL/raft-impl/actions).
+
 ## Testing
 
 ```sh
@@ -79,7 +81,7 @@ The result will be under the directory `logs`. All failed tests' logs will be re
 
 ### Large-scale Tests
 
-`test.sh` use parallel (use 3x-processor workers) and no logging mode to run all tests.
+`test.sh` use parallel (10x-processor workers) and no logging mode to run all tests.
 
 ```sh
 ./test.sh <count>
