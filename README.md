@@ -11,6 +11,7 @@ A demo 1-to-1 implementation in Golang for Raft Consensus algorithm according to
 This implement has the following extra features.
 
 - Using mutex lock shortly.
+- Using timer channel to avoid busy-waiting.
 - Gracefully killing.
 - Enabling big-step descreasing nextIndex (opt-out).
 - Full logging (opt-in).

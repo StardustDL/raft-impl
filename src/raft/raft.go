@@ -552,25 +552,28 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
+	isleader := rf.role == leader
+	term := rf.currentTerm
 
-	if rf.role == leader {
-		// isLeader may unexpected changed after testing if no lock
-		rf.InLock(func() {
-			if rf.role == leader {
-				rf.LogClass(LOG_CLASS_CLIENT, "Recieve request: %+v", command)
+	// isLeader may unexpected changed after testing if no lock
+	rf.InLock(func() {
+		term = rf.currentTerm
+		isleader = rf.role == leader
 
-				index = rf.createLogEntry(command)
+		if isleader {
+			rf.LogClass(LOG_CLASS_CLIENT, "Recieve request: %+v", command)
 
-				rf.LogClass(LOG_CLASS_CLIENT, "Reply request %+v: %d", command, index)
-			}
-		}, "Start")
+			index = rf.createLogEntry(command)
 
-		// Updated on stable storage before responding to RPCs
-		// > Leader does not responding to RPCs, just send RPCs.
-		rf.persist()
-	}
+			rf.LogClass(LOG_CLASS_CLIENT, "Reply request %+v: %d", command, index)
+		}
+	}, "Start")
 
-	return index, rf.currentTerm, rf.role == leader
+	// Updated on stable storage before responding to RPCs
+	// > Leader does not responding to RPCs, just send RPCs.
+	rf.persist()
+
+	return index, term, isleader
 }
 
 func (rf *Raft) createLogEntry(command interface{}) int {
