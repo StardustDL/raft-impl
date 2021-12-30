@@ -28,13 +28,13 @@ jobs:
     - name: All tests
       run: pwsh -c ./tests/all.ps1
     - name: Batch tests (Serial Logging)
-      run: python3 ./batch_test.py all -w 1 -c 5
+      run: python3 ./batch_test.py all -w 1 -c 3
     - name: Batch tests (Parallel Logging)
-      run: python3 ./batch_test.py all -c 10
+      run: python3 ./batch_test.py all -c 6
     - name: Batch tests (Serial No-logging)
-      run: python3 ./batch_test.py all -f ' ' -w 1 -c 5
+      run: python3 ./batch_test.py all -f ' ' -w 1 -c 3
     - name: Batch tests (Parallel No-logging)
-      run: python3 ./batch_test.py all -f ' ' -c 10
+      run: python3 ./batch_test.py all -f ' ' -c 6
     - name: Batch results
       run: cat ./logs/*/result.log
     - name: Upload artifacts
