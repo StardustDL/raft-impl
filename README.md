@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/StardustDL/raft-impl/workflows/CI/badge.svg) ![](https://img.shields.io/github/license/StardustDL/raft-impl.svg)
 
-A demo 1-to-1 implementation in Golang for Raft Consensus algorithm according to the [paper](https://raft.github.io/raft.pdf), based on 6.824's raft labs, with the following core features supported.
+A demo 1-to-1 implementation with high availability in Golang for Raft Consensus algorithm according to the [paper](https://raft.github.io/raft.pdf), based on 6.824's raft labs, with the following core features supported.
 
 - Leader Election
 - Log Replication
@@ -13,13 +13,28 @@ This implement has the following extra features.
 - Using mutex lock shortly.
 - Using timer channel to avoid busy-waiting.
 - Gracefully killing.
-- Enabling big-step descreasing nextIndex (opt-out).
-- Full logging (opt-in).
+- Enabling big-step next-index descreasing (opt-out).
+- Fully logging (opt-in).
 - Detecting disconnecting to convert to follower (opt-in).
-- More than **99.999%** availability through all tests in parallel.
-  - Passed more than **200,000** parallel batch tests (with default configuration).
 
-> All commits are automatically tested (in small scale) by GitHub Actions, real-time testing results is at [there](https://github.com/StardustDL/raft-impl/actions).
+> The opt-in/opt-out features can be configured by `DEBUG` flags, which are described in the following section.
+
+In all tests run in parallel, this implement has more than **99.999%** availability. It passed more than **200,000** parallel batch tests with default configuration.
+
+> All commits are automatically tested (in small scale) by GitHub Actions, real-time testing results is at [here](https://github.com/StardustDL/raft-impl/actions).
+
+## Running
+
+The project detects a runtime environment variable **`DEBUG`**. If it exists and it is **not empty** (any non-empty values is OK), the debug mode and logging will enable. The following flags can be used in the variable.
+
+|Flag|Effect|
+|-|-|
+|**`H`**|Enable heartbeat logging|
+|**`T`**|Enable timer logging|
+|**`L`**|Enable lock logging|
+|**`D`**|Enable disconnection detecting|
+|**`p`**|Disable persisting|
+|**`b`**|Disable the optimization for big-step to decrease nextIndex|
 
 ## Testing
 
@@ -31,16 +46,6 @@ Run the following script.
 cd src/raft
 go test
 ```
-
-The project detects a runtime environment variable **`DEBUG`**.
-
-- Enable debug mode and logging, if it exists and it is not empty (any non-empty values is OK).
-- Enable logging heartbeat, if it contains `H`.
-- Enable logging timer, if it contains `T`.
-- Enable logging lock, if it contains `L`.
-- Enable detecting disconnect, if it contains `D`.
-- Disable persisting, if it contains `p`.
-- Disable the optimization for big-step to decrease nextIndex, if it contains `b`
 
 ### Group Tests
 
