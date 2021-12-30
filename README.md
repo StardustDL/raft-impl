@@ -17,18 +17,22 @@ This implement has the following extra features.
 - Full logging (opt-in).
 - Detecting disconnecting to convert to follower (opt-in).
 - More than **99.999%** availability through all tests in parallel.
-  - Passed more than 100000 parallel batch tests.
+  - Passed more than **200,000** parallel batch tests (with default configuration).
 
-> All commits are automatically tested (in small scale) by GitHub Actions, you can see real-time testing results at [there](https://github.com/StardustDL/raft-impl/actions).
+> All commits are automatically tested (in small scale) by GitHub Actions, real-time testing results is at [there](https://github.com/StardustDL/raft-impl/actions).
 
 ## Testing
+
+> Using Go 1.17.5 with go-module enabled.
+
+Run the following script.
 
 ```sh
 cd src/raft
 go test
 ```
 
-The project detect a runtime environment variable **`DEBUG`**.
+The project detects a runtime environment variable **`DEBUG`**.
 
 - Enable debug mode and logging, if it exists and it is not empty (any non-empty values is OK).
 - Enable logging heartbeat, if it contains `H`.

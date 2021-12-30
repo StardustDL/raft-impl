@@ -98,14 +98,17 @@ def paralleltest(args: Tuple[str, str, str]) -> Tuple[bool, timedelta]:
 def test(id: str, name: str, cnt: int, workers: Optional[int], flags: str) -> int:
     now = datetime.now()
 
+    logs: List[str] = [f"{id}: {name}, {cnt} cases, {workers} workers, @ {now}"]
+    print("\n".join(logs))
+
     with ProcessPoolExecutor(workers) as pool:
         results = list(
             pool.map(paralleltest, [(id, name, i, flags) for i in range(cnt)]))
 
     passed = sum((1 for p in results if p[0]))
 
-    logs = [f"{id}: {name}, {cnt} cases, {workers} workers, @ {now}",
-            f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%"]
+    logs[0] += f" ~ {datetime.now()}"
+    logs.append(f"Passed {passed}, failed {cnt - passed}, Passed {int(passed/cnt*10000)/100}%")
     print("\n".join(logs))
     logs.extend(
         (f"Case {i}: {'PASSED' if v[0] else 'FAILED'} {v[1]}" for i, v in enumerate(results)))
@@ -121,7 +124,7 @@ def test(id: str, name: str, cnt: int, workers: Optional[int], flags: str) -> in
     return passed
 
 
-def testall(id: str, names: List[str], cnt: int, workers: Optional[int], flags: str):
+def testall(id: str, names: List[str], cnt: int, workers: Optional[int], flags: str) -> bool:
     result = {}
     logroot = LOG_ROOT.joinpath(id)
     if not logroot.exists():
@@ -132,9 +135,13 @@ def testall(id: str, names: List[str], cnt: int, workers: Optional[int], flags: 
     subprocess.check_call(
         ["go", "test", "-c", "-o", str(testerPath)], cwd=RAFT_ROOT)
 
+    passedAll = True
+
     for name in names:
         passed = test(id, name, cnt, workers, flags)
         result[name] = passed
+        if passed < cnt:
+            passedAll = False
     items = list(result.items())
     items.sort(key=lambda x: (x[1], x[0]))
     resultlogs = "\n".join(
@@ -142,6 +149,13 @@ def testall(id: str, names: List[str], cnt: int, workers: Optional[int], flags: 
     LOG_ROOT.joinpath(id).joinpath(
         f"result.log").write_text(resultlogs + "\n")
     print(resultlogs)
+
+    if passedAll:
+        print("All tests passed!")
+    else:
+        print("Some tests failed!")
+
+    return passedAll
 
 
 def main():
@@ -165,7 +179,12 @@ def main():
     now = datetime.now()
     id = now.strftime("%Y-%m-%dT%H-%M-%S")
 
-    testall(f"{name}-{id}", names, cnt, workers, flags)
+    passed = testall(f"{name}-{id}", names, cnt, workers, flags)
+
+    if passed:
+        exit(0)
+    else:
+        exit(1)
 
 
 if __name__ == "__main__":
